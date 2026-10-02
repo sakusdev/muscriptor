@@ -313,7 +313,6 @@ def infer_beats_per_bar(
     return int(values[best])
 
 
-
 def grid_from_beats(
     beats: np.ndarray,
     downbeats: np.ndarray,
@@ -350,7 +349,9 @@ def grid_from_beats(
         median_interval = float(np.median(intervals))
         if median_interval <= 0:
             raise BeatDetectionError("Beat tracker returned non-increasing beat times")
-        ibi_mad = float(np.median(np.abs(intervals - median_interval))) / median_interval
+        ibi_mad = (
+            float(np.median(np.abs(intervals - median_interval))) / median_interval
+        )
         outliers = (intervals < 0.5 * median_interval) | (
             intervals > 1.5 * median_interval
         )
@@ -395,6 +396,7 @@ def grid_from_beats(
         first_downbeat=first_downbeat,
         beats=beats,
     )
+
 
 def detect_grid(
     wav: torch.Tensor,
