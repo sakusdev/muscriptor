@@ -49,7 +49,13 @@ class OutputFormat(str, Enum):
     sheets = "sheets"
 
 
-def _transcribe(model, kwargs: dict, detect_tempo: str, quantize: bool = False):
+def _transcribe(
+    model,
+    kwargs: dict,
+    detect_tempo: str,
+    quantize: bool = False,
+    dynamic_velocity: bool = True,
+):
     """transcribe_and_postprocess, with the CLI's --detect-tempo spelling and errors."""
     try:
         mode: TempoDetection = {
@@ -58,7 +64,10 @@ def _transcribe(model, kwargs: dict, detect_tempo: str, quantize: bool = False):
             "best-effort": "best-effort",
         }[detect_tempo]
         return model.transcribe_and_postprocess(
-            **kwargs, detect_tempo=mode, quantize=quantize
+            **kwargs,
+            detect_tempo=mode,
+            quantize=quantize,
+            dynamic_velocity=dynamic_velocity,
         )
     except BeatDetectionError as e:
         typer.echo(f"Error: {e}", err=True)
@@ -232,13 +241,33 @@ def transcribe(
         Literal["true", "false", "best-effort"],
         typer.Option(
             help=(
-                "Detect the tempo and time signature from the audio and write "
-                "them into the MIDI. 'true' fails if no steady tempo is found, "
-                "'best-effort' warns and uses a placeholder 120 BPM with no "
-                "time signature, 'false' skips detection altogether."
+                "Detect tempo/meter from the audio. 'true' requires a steady "
+                "tempo; 'best-effort' keeps an average BPM for moderate live "
+                "tempo drift and only falls back to placeholder 120 BPM if "
+                "tracking is unusable; 'false' skips detection."
             ),
         ),
     ] = "best-effort",
+    quantize: Annotated[
+        bool,
+        typer.Option(
+            "--quantize/--no-quantize",
+            help=(
+                "Snap MIDI notes to the detected beat subdivision. Off by default "
+                "for normal MIDI listening; sheet output is always quantized."
+            ),
+        ),
+    ] = False,
+    dynamic_velocity: Annotated[
+        bool,
+        typer.Option(
+            "--dynamic-velocity/--fixed-velocity",
+            help=(
+                "Estimate per-note MIDI velocity from the source audio. Disable "
+                "to preserve the legacy fixed velocity of 100."
+            ),
+        ),
+    ] = True,
 ) -> None:
     """Transcribe an audio file to MIDI."""
     instrument_names: list[str] | None = None
@@ -326,7 +355,13 @@ def transcribe(
     if format == OutputFormat.sheets:
         # Quantize to get the "idealized" timing, otherwise we might get very weird
         # 1/64th rests etc.
-        midi_bytes, grid = _transcribe(model, kwargs, detect_tempo, quantize=True)
+        midi_bytes, grid = _transcribe(
+            model,
+            kwargs,
+            detect_tempo,
+            quantize=True,
+            dynamic_velocity=dynamic_velocity,
+        )
         typer.echo(f"Engraving sheet music with MuseScore → {output} …", err=True)
         try:
             written = write_sheets(
@@ -341,7 +376,13 @@ def transcribe(
             typer.echo(f"  {path.name}", err=True)
         typer.echo(f"Saved {len(written)} files to {output}", err=True)
     elif format == OutputFormat.midi:
-        midi_bytes, _ = _transcribe(model, kwargs, detect_tempo)
+        midi_bytes, _ = _transcribe(
+            model,
+            kwargs,
+            detect_tempo,
+            quantize=quantize,
+            dynamic_velocity=dynamic_velocity,
+        )
         if is_stdout:
             sys.stdout.buffer.write(midi_bytes)
             sys.stdout.buffer.flush()

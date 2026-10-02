@@ -1,0 +1,48 @@
+name: tests
+
+on:
+  push:
+    branches:
+      - main
+      - "work/**"
+  pull_request:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv python install 3.12
+      - run: uv sync --dev
+      - run: uv run pytest -q
+      - name: Ruff check new post-processing code
+        run: >-
+          uvx ruff check
+          muscriptor/colab_app.py
+          muscriptor/utils/beats.py
+          muscriptor/utils/dynamics.py
+          tests/test_beats.py
+          tests/test_colab_app.py
+          tests/test_cli.py
+          tests/test_dynamics.py
+      - name: Ruff format check changed Python files
+        run: >-
+          uvx ruff format --check
+          muscriptor/main.py
+          muscriptor/server.py
+          muscriptor/colab_app.py
+          muscriptor/tokenizer/notes.py
+          muscriptor/transcription_model.py
+          muscriptor/utils/beats.py
+          muscriptor/utils/dynamics.py
+          tests/test_beats.py
+          tests/test_colab_app.py
+          tests/test_cli.py
+          tests/test_dynamics.py

@@ -7,16 +7,20 @@ only detect_grid touches the model.
 import dataclasses
 
 import numpy as np
+import pytest
 
 from muscriptor.utils.beats import (
     BAR_OFFSET_MARKER,
+    MAX_BEST_EFFORT_IBI_MAD,
     MAX_ONSET_DELAY_S,
     MAX_TEMPO_RESIDUAL,
     MIN_ONSETS,
+    BeatDetectionError,
     BeatGrid,
     estimate_onset_delay,
     fit_tempo,
     get_onsets_phase,
+    grid_from_beats,
     infer_beats_per_bar,
     read_bar_offset,
 )
@@ -246,3 +250,32 @@ def test_read_bar_offset():
     assert read_bar_offset(_FakeMidi([])) == 0.0
     assert read_bar_offset(_FakeMidi(["some other marker"])) == 0.0
     assert read_bar_offset(_FakeMidi([f"{BAR_OFFSET_MARKER}nonsense"])) == 0.0
+
+
+def test_best_effort_keeps_average_bpm_for_moderate_live_drift():
+    beats = _beats(96.0, n=128, drift=0.05)
+    downbeats = beats[::4]
+
+    # Strict mode keeps the original behaviour.
+    with pytest.raises(BeatDetectionError):
+        grid_from_beats(beats, downbeats, allow_tempo_drift=False)
+
+    grid = grid_from_beats(beats, downbeats, allow_tempo_drift=True)
+    assert 90.0 < grid.bpm < 100.0
+    assert grid.beats_per_bar is None
+    assert grid.beats is None
+    assert grid.beat_subdivision is None
+
+
+def test_best_effort_still_rejects_unstable_tracking():
+    # Alternating half/double-ish beat intervals look like missing/spurious tracker
+    # events, not expressive tempo drift.
+    intervals = np.tile([0.30, 0.90], 64)
+    beats = np.concatenate([[0.0], np.cumsum(intervals)])
+    downbeats = beats[::4]
+
+    median_interval = np.median(np.diff(beats))
+    ibi_mad = np.median(np.abs(np.diff(beats) - median_interval)) / median_interval
+    assert ibi_mad > MAX_BEST_EFFORT_IBI_MAD
+    with pytest.raises(BeatDetectionError):
+        grid_from_beats(beats, downbeats, allow_tempo_drift=True)

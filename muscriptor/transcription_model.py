@@ -52,6 +52,7 @@ from muscriptor.utils.beats import (
     detect_grid,
 )
 from muscriptor.utils.download import download_companion, download_if_necessary
+from muscriptor.utils.dynamics import apply_audio_velocities
 from muscriptor.utils.midi import notes_to_midi
 
 
@@ -631,6 +632,7 @@ class TranscriptionModel:
         prelude_forcing: bool = True,
         detect_tempo: TempoDetection = "best-effort",
         quantize: bool = False,
+        dynamic_velocity: bool = True,
     ) -> tuple[bytes, BeatGrid | None]:
         """Same as :meth:`transcribe`, but as a MIDI file plus the grid it used.
 
@@ -642,11 +644,19 @@ class TranscriptionModel:
         music has to be engraved from (see :meth:`events_to_midi_bytes`) and not
         what anyone wants to listen to. The returned grid says whether there was
         a subdivision to snap to at all.
+
+        `dynamic_velocity` estimates playback velocity from the source audio.
+        The model itself emits only binary note on/off state, so disabling this
+        preserves the legacy fixed velocity of 100.
         """
-        beat_grid = self.detect_beat_grid_for(audio, detect_tempo)
+        tensor, sample_rate = audio if isinstance(audio, tuple) else (audio, None)
+        wav = self._load_wav(tensor, sample_rate)
+        normalized_audio = (wav, _SAMPLE_RATE)
+
+        beat_grid = self.detect_beat_grid_for(normalized_audio, detect_tempo)
         events = list(
             self.transcribe(
-                audio,
+                normalized_audio,
                 use_sampling=use_sampling,
                 temperature=temperature,
                 cfg_coef=cfg_coef,
@@ -662,7 +672,12 @@ class TranscriptionModel:
                 [ev.start_time for ev in events if isinstance(ev, NoteStartEvent)]
             )
         midi_bytes = self.events_to_midi_bytes(
-            iter(events), beat_grid=beat_grid, quantize=quantize
+            iter(events),
+            beat_grid=beat_grid,
+            quantize=quantize,
+            audio_wav=wav if dynamic_velocity else None,
+            audio_sample_rate=_SAMPLE_RATE,
+            dynamic_velocity=dynamic_velocity,
         )
         return midi_bytes, beat_grid
 
@@ -685,7 +700,11 @@ class TranscriptionModel:
             return None
         tensor, sample_rate = audio if isinstance(audio, tuple) else (audio, None)
         try:
-            return detect_grid(self._load_wav(tensor, sample_rate), _SAMPLE_RATE)
+            return detect_grid(
+                self._load_wav(tensor, sample_rate),
+                _SAMPLE_RATE,
+                allow_tempo_drift=mode == "best-effort",
+            )
         except BeatDetectionError as e:
             if mode is True:
                 raise
@@ -700,6 +719,9 @@ class TranscriptionModel:
         events: Iterator[NoteStartEvent | NoteEndEvent | ProgressEvent],
         beat_grid: BeatGrid | None = None,
         quantize: bool = False,
+        audio_wav: torch.Tensor | None = None,
+        audio_sample_rate: int = _SAMPLE_RATE,
+        dynamic_velocity: bool = False,
     ) -> bytes:
         """Reassemble Notes from a NoteStart/NoteEnd stream and serialize MIDI.
 
@@ -710,6 +732,9 @@ class TranscriptionModel:
         which is what sheet music has to be engraved from (see
         `muscriptor.utils.midi.quantized_notes`) and not what anyone wants to
         listen to. Call twice for both versions of the same transcription.
+
+        When `dynamic_velocity` is true and `audio_wav` is provided, source-audio
+        onset energy is converted into per-note MIDI velocity before serialization.
         """
         notes: list[Note] = []
         open_notes: dict[int, Note] = {}
@@ -742,6 +767,8 @@ class TranscriptionModel:
         # don't drift from earlier reference outputs.
         notes = validate_notes(notes, fix=True)
         notes = trim_overlapping_notes(notes, sort=True)
+        if dynamic_velocity and audio_wav is not None:
+            notes = apply_audio_velocities(notes, audio_wav, audio_sample_rate)
         midi = notes_to_midi(
             notes, program_names=program_names, beat_grid=beat_grid, quantize=quantize
         )

@@ -311,13 +311,24 @@ def create_app(model: TranscriptionModel, web_dir: str | Path | None = None) -> 
                             if isinstance(ev, NoteStartEvent)
                         ]
                     )
-                midi_bytes = model.events_to_midi_bytes(iter(events), beat_grid=grid)
+                midi_bytes = model.events_to_midi_bytes(
+                    iter(events),
+                    beat_grid=grid,
+                    audio_wav=wav,
+                    audio_sample_rate=sr,
+                    dynamic_velocity=True,
+                )
                 midi_b64 = base64.b64encode(midi_bytes).decode("ascii")
                 # A second copy with the notes snapped to the beat grid. Useful for
                 # writing sheet music where we want "idealized" timing
                 quantized_midi = (
                     model.events_to_midi_bytes(
-                        iter(events), beat_grid=grid, quantize=True
+                        iter(events),
+                        beat_grid=grid,
+                        quantize=True,
+                        audio_wav=wav,
+                        audio_sample_rate=sr,
+                        dynamic_velocity=True,
                     )
                     if grid is not None and grid.beat_subdivision is not None
                     else None
