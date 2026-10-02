@@ -46,7 +46,7 @@ The weights are then automatically downloaded on first use and cached locally.
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/sakusdev/muscriptor/blob/work/expressive-midi/notebooks/MuScriptor_Colab.ipynb)
 
-The Colab notebook provides an `ipywidgets` UI for:
+The Colab notebook provides an inline **Gradio** UI for:
 
 - audio upload
 - Small / Medium / **Large (1.4B)** model selection
@@ -57,10 +57,11 @@ The Colab notebook provides an `ipywidgets` UI for:
 - one-click MIDI download
 
 Large is selected by default, and the loaded model is cached in the Colab session
-so transcribing a second song does not reload the checkpoint. Before the first run,
-accept the model license on Hugging Face and either add `HF_TOKEN` to Colab
-**Secrets**, paste a token into the widget's Advanced section, or authenticate in
-the notebook environment another way.
+so transcribing a second song does not reload the checkpoint. Gradio is used instead
+of ipywidgets because Colab file upload/download interactions are more reliable that
+way. Before the first run, accept the model license on Hugging Face and either add
+`HF_TOKEN` to Colab **Secrets**, paste a token into the Advanced section, or
+authenticate in the notebook environment another way.
 
 ## Try it locally
 
