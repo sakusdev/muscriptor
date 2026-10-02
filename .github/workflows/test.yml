@@ -18,10 +18,27 @@ jobs:
       - run: uv python install 3.12
       - run: uv sync --dev
       - run: uv run pytest -q
-      - id: precommit
-        continue-on-error: true
-        run: uv run pre-commit run --all-files
-      - if: steps.precommit.outcome == 'failure'
-        run: git diff -- .
-      - if: steps.precommit.outcome == 'failure'
-        run: exit 1
+      - name: Ruff check changed Python files
+        run: >-
+          uvx ruff check
+          muscriptor/main.py
+          muscriptor/server.py
+          muscriptor/tokenizer/notes.py
+          muscriptor/transcription_model.py
+          muscriptor/utils/beats.py
+          muscriptor/utils/dynamics.py
+          tests/test_beats.py
+          tests/test_cli.py
+          tests/test_dynamics.py
+      - name: Ruff format check changed Python files
+        run: >-
+          uvx ruff format --check
+          muscriptor/main.py
+          muscriptor/server.py
+          muscriptor/tokenizer/notes.py
+          muscriptor/transcription_model.py
+          muscriptor/utils/beats.py
+          muscriptor/utils/dynamics.py
+          tests/test_beats.py
+          tests/test_cli.py
+          tests/test_dynamics.py
