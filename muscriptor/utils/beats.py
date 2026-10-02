@@ -16,7 +16,11 @@ logger = logging.getLogger(__name__)
 # average BPM for moderately drifting live performances, but deliberately drops
 # meter/subdivision information so nothing gets quantized to a bad fixed grid.
 MAX_TEMPO_RESIDUAL = 0.05
-MAX_BEST_EFFORT_TEMPO_RESIDUAL = 0.15
+# Best-effort uses a duration-independent local consistency check: median
+# absolute deviation of inter-beat intervals divided by the median interval.
+# Smooth live tempo drift stays small; missing/doubled/spurious beats do not.
+MAX_BEST_EFFORT_IBI_MAD = 0.12
+MAX_BEST_EFFORT_OUTLIER_FRACTION = 0.10
 
 # Fraction of bars that must agree on a beats-per-bar count to write a time
 # signature. Trackers that lose the meter spread their downbeats across several
@@ -336,19 +340,37 @@ def grid_from_beats(
     residual_ratio = residual / beat_seconds
 
     if residual_ratio > MAX_TEMPO_RESIDUAL:
-        if (
-            not allow_tempo_drift
-            or residual_ratio > MAX_BEST_EFFORT_TEMPO_RESIDUAL
-        ):
+        if not allow_tempo_drift:
             raise BeatDetectionError(
                 f"The recording has no fixed tempo (beats deviate "
                 f"{residual * 1000:.0f} ms RMS from a constant {bpm:.1f} BPM)"
             )
 
+        intervals = np.diff(beats)
+        median_interval = float(np.median(intervals))
+        if median_interval <= 0:
+            raise BeatDetectionError("Beat tracker returned non-increasing beat times")
+        ibi_mad = float(np.median(np.abs(intervals - median_interval))) / median_interval
+        outliers = (intervals < 0.5 * median_interval) | (
+            intervals > 1.5 * median_interval
+        )
+        outlier_fraction = float(np.mean(outliers))
+        if (
+            ibi_mad > MAX_BEST_EFFORT_IBI_MAD
+            or outlier_fraction > MAX_BEST_EFFORT_OUTLIER_FRACTION
+        ):
+            raise BeatDetectionError(
+                "Beat tracking is too unstable even for best-effort tempo "
+                f"(IBI MAD {ibi_mad * 100:.1f}%, outliers "
+                f"{outlier_fraction * 100:.1f}%)"
+            )
+
         logger.warning(
-            "tempo drifts too much for a fixed beat grid (%.1f%% beat RMS); "
-            "keeping average %.3f BPM only",
+            "tempo drifts too much for a fixed beat grid (%.1f%% global beat RMS), "
+            "but local beat intervals are coherent (MAD %.1f%%); keeping average "
+            "%.3f BPM only",
             residual_ratio * 100,
+            ibi_mad * 100,
             bpm,
         )
         return BeatGrid(
