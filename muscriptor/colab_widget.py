@@ -182,6 +182,13 @@ def launch():
         style={"description_width": "90px"},
         layout=widgets.Layout(width="520px"),
     )
+    hf_token = widgets.Password(
+        value="",
+        placeholder="optional if HF_TOKEN secret/login is already configured",
+        description="HF token",
+        style={"description_width": "90px"},
+        layout=widgets.Layout(width="520px"),
+    )
 
     transcribe = widgets.Button(
         description="Transcribe",
@@ -215,6 +222,7 @@ def launch():
         quantize.disabled = busy
         dynamic_velocity.disabled = busy
         instruments.disabled = busy
+        hf_token.disabled = busy
 
     def on_transcribe(_button) -> None:
         global _LAST_OUTPUT
@@ -241,6 +249,21 @@ def launch():
             with log:
                 print(f"Input: {input_path.name}")
                 print(f"Model: {model.value}")
+
+                token = hf_token.value.strip()
+                if not token:
+                    try:
+                        from google.colab import userdata
+
+                        token = userdata.get("HF_TOKEN") or ""
+                    except Exception:
+                        token = ""
+                if token:
+                    from huggingface_hub import login
+
+                    login(token=token, add_to_git_credential=False)
+                    hf_token.value = ""
+                    print("Hugging Face authentication: OK")
 
                 loaded_model, newly_loaded = _load_model(
                     model.value, device.value, dtype.value
@@ -320,6 +343,12 @@ def launch():
                 [
                     widgets.HBox([device, dtype]),
                     instruments,
+                    hf_token,
+                    widgets.HTML(
+                        "<small>Accept the MuScriptor model license on Hugging Face "
+                        "before the first run. In Colab you can also save HF_TOKEN "
+                        "under Secrets.</small>"
+                    ),
                     quantize,
                     dynamic_velocity,
                 ],
