@@ -80,6 +80,29 @@ uvx muscriptor transcribe path/to/audio_file.wav
 
 See `--help` for all the options.
 
+### Expressive MIDI post-processing
+
+This fork improves the MIDI produced after transcription without changing the
+MuScriptor model itself:
+
+- **Dynamic velocity is on by default.** MuScriptor tokens only contain note
+  on/off state, so upstream writes every onset at velocity 100. The post-processor
+  now estimates macro-dynamics from short source-audio onset windows and normalizes
+  them per decoded instrument. Use `--fixed-velocity` for the original behavior.
+- **Best-effort tempo keeps useful BPM on live performances.** If beat tracking is
+  coherent but the performance drifts too much for a strict fixed grid,
+  `--detect-tempo best-effort` writes the fitted average BPM while withholding meter
+  and subdivision data. This avoids a needless 120 BPM placeholder without
+  quantizing expressive timing to a false grid.
+- **Raw MIDI can be quantized explicitly** with `--quantize`. It remains off by
+  default for listening/editing; `--format sheets` still quantizes automatically.
+
+Example:
+
+```bash
+uvx muscriptor transcribe song.wav --model large --quantize
+```
+
 ### Sheet music
 
 Using the CLI with `--format sheets` engraves the transcription as readable notation instead of
