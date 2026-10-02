@@ -7,9 +7,11 @@ only detect_grid touches the model.
 import dataclasses
 
 import numpy as np
+import pytest
 
 from muscriptor.utils.beats import (
     BAR_OFFSET_MARKER,
+    MAX_BEST_EFFORT_TEMPO_RESIDUAL,
     MAX_ONSET_DELAY_S,
     MAX_TEMPO_RESIDUAL,
     MIN_ONSETS,
@@ -17,6 +19,7 @@ from muscriptor.utils.beats import (
     estimate_onset_delay,
     fit_tempo,
     get_onsets_phase,
+    grid_from_beats,
     infer_beats_per_bar,
     read_bar_offset,
 )
@@ -246,3 +249,29 @@ def test_read_bar_offset():
     assert read_bar_offset(_FakeMidi([])) == 0.0
     assert read_bar_offset(_FakeMidi(["some other marker"])) == 0.0
     assert read_bar_offset(_FakeMidi([f"{BAR_OFFSET_MARKER}nonsense"])) == 0.0
+
+
+
+def test_best_effort_keeps_average_bpm_for_moderate_live_drift():
+    beats = _beats(96.0, n=128, drift=0.02)
+    downbeats = beats[::4]
+
+    # Strict mode keeps the original behaviour.
+    with pytest.raises(Exception):
+        grid_from_beats(beats, downbeats, allow_tempo_drift=False)
+
+    grid = grid_from_beats(beats, downbeats, allow_tempo_drift=True)
+    assert 90.0 < grid.bpm < 100.0
+    assert grid.beats_per_bar is None
+    assert grid.beats is None
+    assert grid.beat_subdivision is None
+
+
+def test_best_effort_still_rejects_unstable_tracking():
+    beats = _beats(96.0, n=128, drift=0.04)
+    downbeats = beats[::4]
+
+    bpm, residual = fit_tempo(beats)
+    assert residual / (60.0 / bpm) > MAX_BEST_EFFORT_TEMPO_RESIDUAL
+    with pytest.raises(Exception):
+        grid_from_beats(beats, downbeats, allow_tempo_drift=True)
