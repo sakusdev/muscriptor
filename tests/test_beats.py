@@ -11,11 +11,11 @@ import pytest
 
 from muscriptor.utils.beats import (
     BAR_OFFSET_MARKER,
-    BeatDetectionError,
     MAX_BEST_EFFORT_IBI_MAD,
     MAX_ONSET_DELAY_S,
     MAX_TEMPO_RESIDUAL,
     MIN_ONSETS,
+    BeatDetectionError,
     BeatGrid,
     estimate_onset_delay,
     fit_tempo,
