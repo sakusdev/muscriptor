@@ -230,7 +230,9 @@ def launch():
             return
 
         name, data = uploaded
-        workspace = Path("/content/muscriptor") if Path("/content").exists() else Path.cwd()
+        workspace = (
+            Path("/content/muscriptor") if Path("/content").exists() else Path.cwd()
+        )
         workspace.mkdir(parents=True, exist_ok=True)
         input_path = workspace / name
         input_path.write_bytes(data)
@@ -304,14 +306,13 @@ def launch():
                 print(f"Saved: {output_path}")
                 print(f"Size: {len(midi_bytes) / 1024:.1f} KiB")
 
-            status.value = (
-                "<b style='color:#2e7d32'>Done.</b> "
-                + html.escape(output_path.name)
+            status.value = "<b style='color:#2e7d32'>Done.</b> " + html.escape(
+                output_path.name
             )
             download.disabled = False
         except Exception as exc:  # noqa: BLE001 - UI must surface transcription failures
-            status.value = (
-                "<b style='color:#c62828'>Failed:</b> " + html.escape(str(exc))
+            status.value = "<b style='color:#c62828'>Failed:</b> " + html.escape(
+                str(exc)
             )
             with log:
                 import traceback
