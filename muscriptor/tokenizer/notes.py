@@ -380,7 +380,9 @@ def note_event2midi(
         msg_velocity = (
             max(1, min(127, int(ne.midi_velocity)))
             if ne.velocity > 0 and ne.midi_velocity is not None
-            else velocity if ne.velocity > 0 else 0
+            else velocity
+            if ne.velocity > 0
+            else 0
         )
         track.append(
             Message(
