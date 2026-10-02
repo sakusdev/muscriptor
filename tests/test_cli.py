@@ -203,3 +203,41 @@ def test_instruments_passed_to_model(patched_model, fake_audio):
     )
     assert result.exit_code == 0, result.stderr
     assert _FakeModel.last_kwargs["instruments"] == ["violin", "drums"]
+
+
+
+def test_midi_defaults_to_dynamic_velocity_without_quantizing(
+    patched_model, fake_audio, tmp_path
+):
+    out = tmp_path / "out.mid"
+    runner = CliRunner()
+    result = runner.invoke(
+        main_mod.app,
+        ["transcribe", str(fake_audio), "-f", "midi", "-o", str(out)],
+    )
+    assert result.exit_code == 0, result.stderr
+    assert _FakeModel.last_kwargs["dynamic_velocity"] is True
+    assert _FakeModel.last_kwargs["quantize"] is False
+
+
+def test_midi_postprocessing_flags_are_forwarded(
+    patched_model, fake_audio, tmp_path
+):
+    out = tmp_path / "out.mid"
+    runner = CliRunner()
+    result = runner.invoke(
+        main_mod.app,
+        [
+            "transcribe",
+            str(fake_audio),
+            "-f",
+            "midi",
+            "-o",
+            str(out),
+            "--quantize",
+            "--fixed-velocity",
+        ],
+    )
+    assert result.exit_code == 0, result.stderr
+    assert _FakeModel.last_kwargs["dynamic_velocity"] is False
+    assert _FakeModel.last_kwargs["quantize"] is True
