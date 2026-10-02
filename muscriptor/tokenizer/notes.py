@@ -22,6 +22,9 @@ class Note:
     onset: float  # onset time in seconds
     offset: float  # offset time in seconds (== onset for drums)
     pitch: int  # MIDI note number (0-127)
+    # Playback velocity inferred during post-processing. None keeps the legacy
+    # fixed velocity chosen by note_event2midi().
+    midi_velocity: int | None = None
 
 
 @dataclass
@@ -31,6 +34,9 @@ class NoteEvent:
     time: float  # absolute time in seconds
     velocity: int  # 1 for onset, 0 for offset; drum has no offset
     pitch: int  # MIDI pitch
+    # MIDI playback velocity for onset events. The token-level `velocity` above
+    # remains the model's binary note-on/note-off state.
+    midi_velocity: int | None = None
 
 
 @dataclass
@@ -169,6 +175,7 @@ def note_event2note(
                             onset=ne.time,
                             offset=ne.time + MINIMUM_NOTE_DURATION_SEC,
                             pitch=ne.pitch,
+                            midi_velocity=ne.midi_velocity,
                         )
                     )
                 else:
@@ -186,6 +193,7 @@ def note_event2note(
                                 onset=active_ne.time,
                                 offset=ne.time,
                                 pitch=active_ne.pitch,
+                                midi_velocity=active_ne.midi_velocity,
                             )
                         )
                     else:  # TieNoteEvent
@@ -220,6 +228,7 @@ def note_event2note(
                             if force_offset_past_segment_end is None
                             else force_offset_past_segment_end,
                             pitch=ne.pitch,
+                            midi_velocity=ne.midi_velocity,
                         )
                     )
         except ValueError as ve:
@@ -248,7 +257,14 @@ def note2note_event(notes: list[Note]) -> list[NoteEvent]:
         if note.program == 1024:
             note.is_drum = True
         note_events.append(
-            NoteEvent(note.is_drum, note.program, note.onset, 1, note.pitch)
+            NoteEvent(
+                note.is_drum,
+                note.program,
+                note.onset,
+                1,
+                note.pitch,
+                midi_velocity=note.midi_velocity,
+            )
         )
         if not note.is_drum:
             note_events.append(
@@ -361,7 +377,11 @@ def note_event2midi(
         track_ticks[key] = absolute_tick
 
         msg_note = "note_on" if ne.velocity > 0 else "note_off"
-        msg_velocity = velocity if ne.velocity > 0 else 0
+        msg_velocity = (
+            max(1, min(127, int(ne.midi_velocity)))
+            if ne.velocity > 0 and ne.midi_velocity is not None
+            else velocity if ne.velocity > 0 else 0
+        )
         track.append(
             Message(
                 msg_note,
