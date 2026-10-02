@@ -252,7 +252,6 @@ def test_read_bar_offset():
     assert read_bar_offset(_FakeMidi([f"{BAR_OFFSET_MARKER}nonsense"])) == 0.0
 
 
-
 def test_best_effort_keeps_average_bpm_for_moderate_live_drift():
     beats = _beats(96.0, n=128, drift=0.05)
     downbeats = beats[::4]
