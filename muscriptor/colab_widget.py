@@ -72,13 +72,10 @@ def _load_model(model_name: str, device: str, dtype: str):
     _MODEL = None
     _MODEL_KEY = None
     gc.collect()
-    try:
-        import torch
+    import torch
 
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-    except Exception:
-        pass
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
     _MODEL = TranscriptionModel.load_model(
         weights_path=model_name,
@@ -256,7 +253,7 @@ def launch():
                         from google.colab import userdata
 
                         token = userdata.get("HF_TOKEN") or ""
-                    except Exception:
+                    except Exception:  # noqa: BLE001 - Colab uses provider-specific secret errors
                         token = ""
                 if token:
                     from huggingface_hub import login
@@ -312,7 +309,7 @@ def launch():
                 + html.escape(output_path.name)
             )
             download.disabled = False
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - UI must surface transcription failures
             status.value = (
                 "<b style='color:#c62828'>Failed:</b> " + html.escape(str(exc))
             )
