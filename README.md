@@ -42,6 +42,26 @@ and accept the CC BY-NC 4.0 license.
 
 The weights are then automatically downloaded on first use and cached locally.
 
+## Google Colab
+
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/sakusdev/muscriptor/blob/work/expressive-midi/notebooks/MuScriptor_Colab.ipynb)
+
+The Colab notebook provides an `ipywidgets` UI for:
+
+- audio upload
+- Small / Medium / **Large (1.4B)** model selection
+- best-effort / strict / disabled tempo detection
+- optional quantization
+- dynamic MIDI velocity
+- instrument constraints
+- one-click MIDI download
+
+Large is selected by default, and the loaded model is cached in the Colab session
+so transcribing a second song does not reload the checkpoint. Before the first run,
+accept the model license on Hugging Face and either add `HF_TOKEN` to Colab
+**Secrets**, paste a token into the widget's Advanced section, or authenticate in
+the notebook environment another way.
+
 ## Try it locally
 
 After Hugging Face authentication, you can use MuScriptor with `uvx` without having to clone this repo.
