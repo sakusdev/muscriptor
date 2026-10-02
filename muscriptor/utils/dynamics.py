@@ -80,7 +80,7 @@ def _velocity(level_db: float, low_db: float, high_db: float, is_drum: bool) -> 
     # Slight upward curve: ordinary notes remain near the familiar ~100 range,
     # while genuinely quiet/loud attacks still separate clearly.
     phase = phase**0.75
-    return int(round(lo + (hi - lo) * phase))
+    return round(lo + (hi - lo) * phase)
 
 
 def apply_audio_velocities(
