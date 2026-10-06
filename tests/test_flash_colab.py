@@ -5,6 +5,7 @@ import mido
 import numpy as np
 
 from muscriptor.flash_colab import (
+    _COLAB_STREAM_EVERY,
     _audio_to_flash_pcm,
     _web_midi_payload,
     _write_midi,
@@ -18,6 +19,10 @@ def _a4_chunk(duration: float = 0.20, sample_rate: int = 16_000):
     t = np.arange(round(duration * sample_rate), dtype=np.float32) / sample_rate
     audio = (0.35 * np.sin(2 * np.pi * 440.0 * t) * 32767.0).astype(np.int16)
     return sample_rate, audio
+
+
+def test_colab_transport_is_low_latency():
+    assert _COLAB_STREAM_EVERY == 0.032
 
 
 def test_audio_bridge_normalizes_int16_and_resamples():
@@ -43,12 +48,18 @@ def test_streaming_session_exports_midi_and_web_midi(tmp_path: Path, monkeypatch
     assert json.loads(start_payload)["messages"] == []
 
     realtime_messages = []
+    last_seq = 0
     for _ in range(4):
         state, _, payload = process_stream(_a4_chunk(), state)
-        realtime_messages.extend(json.loads(payload)["messages"])
+        packet = json.loads(payload)
+        if packet["seq"] != last_seq:
+            realtime_messages.extend(packet["messages"])
+            last_seq = packet["seq"]
 
     state, midi_path, status, stop_payload = stop_flash(state)
-    realtime_messages.extend(json.loads(stop_payload)["messages"])
+    stop_packet = json.loads(stop_payload)
+    if stop_packet["seq"] != last_seq:
+        realtime_messages.extend(stop_packet["messages"])
 
     assert midi_path is not None
     assert "MIDI saved" in status
@@ -63,6 +74,24 @@ def test_streaming_session_exports_midi_and_web_midi(tmp_path: Path, monkeypatch
         if message.type == "note_on" and message.velocity > 0
     ]
     assert 69 in notes
+
+
+def test_idle_web_midi_payload_is_not_reissued():
+    from muscriptor.flash import FlashMidiEvent
+    from muscriptor.flash_colab import _new_state
+
+    state = _new_state()
+    initial = _web_midi_payload(state, [])
+    note_payload = _web_midi_payload(
+        state,
+        [FlashMidiEvent("note_on", 60, 91, 0.1, 0.9, 128.0)],
+    )
+    idle_payload = _web_midi_payload(state, [])
+
+    assert json.loads(initial)["seq"] == 0
+    assert json.loads(note_payload)["seq"] == 1
+    assert idle_payload == note_payload
+    assert state.midi_seq == 1
 
 
 def test_web_midi_payload_serializes_note_messages():
