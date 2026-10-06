@@ -1,0 +1,70 @@
+name: train-flash-neural
+
+on:
+  push:
+    branches:
+      - work/flash-neural
+    paths:
+      - muscriptor/flash_neural.py
+      - .github/workflows/train-flash-neural.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: train-flash-neural-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: work/flash-neural
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - run: uv python install 3.12
+      - run: uv sync --dev
+
+      - name: Train synthetic bootstrap checkpoint
+        run: >-
+          uv run python -m muscriptor.flash_neural train
+          --output muscriptor/checkpoints/flash-neural-synthetic.pt
+          --metrics muscriptor/checkpoints/flash-neural-metrics.json
+          --steps 300
+          --batch-size 32
+          --seed 20261006
+
+      - name: Smoke-test trained checkpoint
+        run: >-
+          uv run python -m muscriptor.flash_neural smoke
+          muscriptor/checkpoints/flash-neural-synthetic.pt
+
+      - name: Upload checkpoint artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: muscriptor-flash-neural-synthetic
+          path: |
+            muscriptor/checkpoints/flash-neural-synthetic.pt
+            muscriptor/checkpoints/flash-neural-metrics.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Commit trained checkpoint to branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f muscriptor/checkpoints/flash-neural-synthetic.pt
+          git add -f muscriptor/checkpoints/flash-neural-metrics.json
+          if git diff --cached --quiet; then
+            echo "Checkpoint unchanged; nothing to commit."
+            exit 0
+          fi
+          git commit -m "Train Flash neural bootstrap checkpoint [skip ci]"
+          git push origin HEAD:work/flash-neural
