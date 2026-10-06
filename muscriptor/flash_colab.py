@@ -30,12 +30,36 @@ _WORKDIR = (
 _WORKDIR.mkdir(parents=True, exist_ok=True)
 
 _NOTE_NAMES = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
+_COLAB_STREAM_EVERY = 0.032
+_EMPTY_MIDI_PAYLOAD = '{"seq":0,"messages":[]}'
 
 _WEB_MIDI_CONNECT_JS = r"""
 async (query) => {
     if (!navigator.requestMIDIAccess) {
         return ["Web MIDI is not supported by this browser. Use Chrome/Edge on desktop."];
     }
+
+    const panic = () => {
+        const output = window.__muscriptorFlashMIDIOutput;
+        if (!output) return;
+        try {
+            output.clear?.();
+            for (const key of (window.__muscriptorFlashActiveNotes || new Set())) {
+                const [channelText, noteText] = key.split(":");
+                const channel = Number(channelText);
+                const note = Number(noteText);
+                output.send([0x80 | channel, note, 0]);
+            }
+            window.__muscriptorFlashActiveNotes?.clear();
+            for (let channel = 0; channel < 16; channel++) {
+                output.send([0xB0 | channel, 123, 0]);
+                output.send([0xB0 | channel, 120, 0]);
+            }
+        } catch (error) {
+            console.warn("MuScripter Flash MIDI panic failed", error);
+        }
+    };
+
     try {
         const access = await navigator.requestMIDIAccess();
         const outputs = Array.from(access.outputs.values());
@@ -61,17 +85,35 @@ async (query) => {
             return [`Multiple MIDI outputs matched '${query}': ${available}. Use a more specific name.`];
         }
 
+        if (window.__muscriptorFlashMIDIOutput) {
+            panic();
+        }
+
         const output = candidates[0];
         await output.open();
         window.__muscriptorFlashMIDIAccess = access;
         window.__muscriptorFlashMIDIOutput = output;
         window.__muscriptorFlashLastSeq = -1;
+        window.__muscriptorFlashActiveNotes = new Set();
+        window.__muscriptorFlashPanic = panic;
+
+        // Start from a known quiet state in case the virtual port retained notes.
+        panic();
 
         access.onstatechange = () => {
-            if (window.__muscriptorFlashMIDIOutput?.state === "disconnected") {
+            const current = window.__muscriptorFlashMIDIOutput;
+            if (current?.state === "disconnected") {
+                panic();
                 window.__muscriptorFlashMIDIOutput = null;
             }
         };
+
+        if (!window.__muscriptorFlashUnloadHookInstalled) {
+            window.addEventListener("pagehide", () => window.__muscriptorFlashPanic?.());
+            window.addEventListener("beforeunload", () => window.__muscriptorFlashPanic?.());
+            window.__muscriptorFlashUnloadHookInstalled = true;
+        }
+
         return [`Realtime MIDI connected: ${output.name || output.id}`];
     } catch (error) {
         return [`Web MIDI access failed: ${error?.message || error}`];
@@ -81,7 +123,8 @@ async (query) => {
 
 _WEB_MIDI_SEND_JS = r"""
 (payload) => {
-    if (!payload || !window.__muscriptorFlashMIDIOutput) {
+    const output = window.__muscriptorFlashMIDIOutput;
+    if (!payload || !output || output.state === "disconnected") {
         return [];
     }
     try {
@@ -90,8 +133,23 @@ _WEB_MIDI_SEND_JS = r"""
             return [];
         }
         window.__muscriptorFlashLastSeq = packet.seq;
+
+        if (!window.__muscriptorFlashActiveNotes) {
+            window.__muscriptorFlashActiveNotes = new Set();
+        }
+
         for (const message of packet.messages || []) {
-            window.__muscriptorFlashMIDIOutput.send(message);
+            output.send(message);
+            const status = message[0] & 0xF0;
+            const channel = message[0] & 0x0F;
+            const note = message[1];
+            const velocity = message[2] || 0;
+            const key = `${channel}:${note}`;
+            if (status === 0x90 && velocity > 0) {
+                window.__muscriptorFlashActiveNotes.add(key);
+            } else if (status === 0x80 || (status === 0x90 && velocity === 0)) {
+                window.__muscriptorFlashActiveNotes.delete(key);
+            }
         }
     } catch (error) {
         console.error("MuScripter Flash Web MIDI bridge error", error);
@@ -107,10 +165,14 @@ _WEB_MIDI_PANIC_JS = r"""
         return ["Realtime MIDI is not connected."];
     }
     try {
-        output.clear?.();
-        for (let channel = 0; channel < 16; channel++) {
-            output.send([0xB0 | channel, 123, 0]);
-            output.send([0xB0 | channel, 120, 0]);
+        if (window.__muscriptorFlashPanic) {
+            window.__muscriptorFlashPanic();
+        } else {
+            output.clear?.();
+            for (let channel = 0; channel < 16; channel++) {
+                output.send([0xB0 | channel, 123, 0]);
+                output.send([0xB0 | channel, 120, 0]);
+            }
         }
         return [`All Notes Off sent to ${output.name || output.id}`];
     } catch (error) {
@@ -129,6 +191,7 @@ class FlashColabState:
     input_seconds: float = 0.0
     last_observed_lag_ms: float = 0.0
     midi_seq: int = 0
+    last_midi_payload: str = _EMPTY_MIDI_PAYLOAD
 
 
 def _note_name(note: int) -> str:
@@ -203,17 +266,23 @@ def _web_midi_payload(
     state: FlashColabState,
     events: list[FlashMidiEvent],
 ) -> str:
-    state.midi_seq += 1
+    """Serialize new MIDI events while keeping idle stream updates unchanged."""
+    if not events:
+        return state.last_midi_payload
+
     messages: list[list[int]] = []
     for event in events:
         if event.type == "note_on":
             messages.append([0x90, int(event.note), int(event.velocity)])
         else:
             messages.append([0x80, int(event.note), 0])
-    return json.dumps(
+
+    state.midi_seq += 1
+    state.last_midi_payload = json.dumps(
         {"seq": state.midi_seq, "messages": messages},
         separators=(",", ":"),
     )
+    return state.last_midi_payload
 
 
 def _status(state: FlashColabState, extra: str | None = None) -> str:
@@ -228,7 +297,7 @@ def _status(state: FlashColabState, extra: str | None = None) -> str:
     return (
         f"{prefix}Active notes: {active}\n"
         f"Chunks: {state.chunks} | audio: {state.input_seconds:.2f}s | "
-        f"analyses: {stats.analyses}\n"
+        f"analyses: {stats.analyses} | MIDI packets: {state.midi_seq}\n"
         f"Max Flash DSP: {stats.max_compute_ms:.1f}ms | "
         f"Flash budget misses: {stats.budget_misses} | "
         f"rough transport/queue lag: {state.last_observed_lag_ms:.1f}ms\n\n"
@@ -255,7 +324,7 @@ def start_flash(
         state,
         _status(state, "Flash started. Play an instrument into the microphone."),
         None,
-        _web_midi_payload(state, []),
+        state.last_midi_payload,
     )
 
 
@@ -276,7 +345,10 @@ def process_stream(
         state.input_seconds += input_seconds
 
         elapsed = time.perf_counter() - state.started_at
-        state.last_observed_lag_ms = max(0.0, (elapsed - state.input_seconds) * 1000.0)
+        state.last_observed_lag_ms = max(
+            0.0,
+            (elapsed - state.input_seconds) * 1000.0,
+        )
 
     return state, _status(state), _web_midi_payload(state, emitted)
 
@@ -333,7 +405,7 @@ def stop_flash(
             state,
             None,
             _status(state, "No Flash session was active."),
-            _web_midi_payload(state, []),
+            state.last_midi_payload,
         )
 
     flushed = state.engine.all_notes_off()
@@ -409,10 +481,10 @@ def build_app():
             """
 # MuScripter Flash · Colab
 
-Live browser microphone → streamed audio chunks → **FlashEngine** → **local realtime MIDI**.
+Live browser microphone → **32 ms transport** → FlashEngine → **local realtime MIDI**.
 
-The browser can forward Flash NoteOn/NoteOff events directly to a local MIDI output
-through Web MIDI. This lets Colab do the analysis while loopMIDI, a hardware MIDI
+The browser forwards Flash NoteOn/NoteOff events directly to a local MIDI output
+through Web MIDI. Colab performs the analysis while loopMIDI, a hardware MIDI
 port, or a DAW on your PC receives the notes in realtime.
 
 The native Flash target is **≤250 ms NoteOn latency**. Colab browser/network
@@ -443,7 +515,7 @@ rough transport/queue lag separately.
 
 Create/start your local virtual MIDI port first (for example loopMIDI), enter a
 unique part of its name below, then press **Connect realtime MIDI**. Your browser
-will ask for MIDI-device permission.
+will ask for MIDI-device permission. Chrome/Edge desktop is recommended.
 """
             )
             with gr.Row():
@@ -506,7 +578,7 @@ will ask for MIDI-device permission.
                 fn=process_stream,
                 inputs=[microphone, live_state],
                 outputs=[live_state, live_status, midi_bridge],
-                stream_every=0.1,
+                stream_every=_COLAB_STREAM_EVERY,
                 time_limit=600,
                 concurrency_limit=1,
                 show_progress="hidden",
@@ -555,7 +627,8 @@ will ask for MIDI-device permission.
 **Browser note:** Web MIDI is not available in every browser. Desktop Chrome/Edge
 is the recommended path. MIDI access requires a secure context and explicit
 browser permission. If the inline Colab frame blocks MIDI permission, open the
-Gradio frame in a new tab and connect from there.
+Gradio frame in a new tab and connect from there. A panic is sent automatically
+when the MIDI output disconnects or the page is closed.
 """
         )
 
