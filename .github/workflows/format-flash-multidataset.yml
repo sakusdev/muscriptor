@@ -24,6 +24,7 @@ jobs:
       - name: Commit formatting
         run: |
           if git diff --quiet; then
+            echo "Already formatted."
             exit 0
           fi
           git config user.name "github-actions[bot]"
