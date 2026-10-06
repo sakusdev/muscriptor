@@ -1,14 +1,6 @@
 name: train-flash-bach10
 
 on:
-  push:
-    branches:
-      - work/flash-realdata
-    paths:
-      - muscriptor/flash_realdata.py
-      - muscriptor/flash_neural.py
-      - muscriptor/checkpoints/flash-neural-synthetic.pt
-      - .github/workflows/train-flash-bach10.yml
   workflow_dispatch:
 
 permissions:
@@ -92,8 +84,6 @@ jobs:
             exit 0
           fi
           git commit -m "Fine-tune Flash neural model on Bach10 [skip ci]"
-          # uv may leave resolver state or other ignored workspace changes. The
-          # checkpoint is committed now, so clean everything else before rebasing.
           git reset --hard HEAD
           git clean -fd
           git fetch origin work/flash-realdata
