@@ -1,0 +1,17 @@
+{
+  "format": 1,
+  "backend": "conv1d-gru-synthetic-bootstrap",
+  "sample_rate": 16000,
+  "window_samples": 2048,
+  "window_ms": 128.0,
+  "min_midi": 21,
+  "max_midi": 108,
+  "steps": 300,
+  "batch_size": 32,
+  "seed": 20261006,
+  "train_loss": 0.601798951625824,
+  "validation_loss": 0.6559371948242188,
+  "precision": 0.05,
+  "recall": 0.005649717514124294,
+  "f1": 0.01015228426395939
+}
