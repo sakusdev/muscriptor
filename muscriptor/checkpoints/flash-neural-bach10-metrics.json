@@ -1,0 +1,39 @@
+{
+  "format": 3,
+  "backend": "log-spectrum-mlp-bach10-finetuned",
+  "sample_rate": 16000,
+  "window_samples": 2048,
+  "window_ms": 128.0,
+  "min_midi": 21,
+  "max_midi": 108,
+  "source_checkpoint": "muscriptor/checkpoints/flash-neural-synthetic.pt",
+  "dataset": "Bach10 v1.1",
+  "train_pieces": [
+    "01-AchGottundHerr",
+    "02-AchLiebenChristen",
+    "03-ChristederdubistTagundLicht",
+    "04-ChristeDuBeistand",
+    "05-DieNacht",
+    "06-DieSonne",
+    "07-HerrGott",
+    "08-FuerDeinenThron"
+  ],
+  "validation_pieces": [
+    "09-Jesus",
+    "10-NunBitten"
+  ],
+  "steps": 300,
+  "best_step": 300,
+  "batch_size": 32,
+  "real_fraction": 0.75,
+  "seed": 20261007,
+  "train_loss": 0.22361160814762115,
+  "baseline_decision_threshold": 0.5,
+  "baseline_precision": 0.4966420786083893,
+  "baseline_recall": 0.6204951856946355,
+  "baseline_f1": 0.5517030514278725,
+  "decision_threshold": 0.85,
+  "precision": 0.6173903900746504,
+  "recall": 0.8077028885832187,
+  "f1": 0.6998391037482866
+}
