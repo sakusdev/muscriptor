@@ -1,0 +1,55 @@
+name: fix-flash-label-boundaries
+
+on:
+  push:
+    branches:
+      - work/flash-musicnet
+    paths:
+      - .github/workflows/fix-flash-label-boundaries.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: work/flash-musicnet
+      - uses: astral-sh/setup-uv@v6
+      - name: Patch compatibility and label boundaries
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          multi = Path('muscriptor/flash_multidataset.py')
+          text = multi.read_text()
+          old = '''    bach10: str | Path | None,\n    urmp: str | Path | None,\n    musicnet: str | Path | None,\n) -> tuple[dict[str, list[TimedPiece]], dict[str, list[TimedPiece]]]:'''
+          new = '''    bach10: str | Path | None,\n    urmp: str | Path | None,\n    musicnet: str | Path | None = None,\n) -> tuple[dict[str, list[TimedPiece]], dict[str, list[TimedPiece]]]:'''
+          if old not in text:
+              raise SystemExit('split signature not found')
+          text = text.replace(old, new, 1)
+          old_stop = '            stop = max(start + 1, math.ceil(offset / _URMP_HOP_SECONDS) - 1)'
+          new_stop = '            stop = max(0, math.ceil(offset / _URMP_HOP_SECONDS) - 1)'
+          if old_stop not in text:
+              raise SystemExit('URMP stop expression not found')
+          text = text.replace(old_stop, new_stop, 1)
+          multi.write_text(text)
+
+          musicnet = Path('muscriptor/flash_musicnet.py')
+          text = musicnet.read_text()
+          old_stop = '        stop = max(start + 1, math.ceil(offset / _MUSICNET_HOP_SECONDS) - 1)'
+          new_stop = '        stop = max(0, math.ceil(offset / _MUSICNET_HOP_SECONDS) - 1)'
+          if old_stop not in text:
+              raise SystemExit('MusicNet stop expression not found')
+          musicnet.write_text(text.replace(old_stop, new_stop, 1))
+          PY
+          uvx ruff format muscriptor/flash_multidataset.py muscriptor/flash_musicnet.py
+      - name: Commit fixes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add muscriptor/flash_multidataset.py muscriptor/flash_musicnet.py
+          git commit -m "Fix Flash label boundary handling and compatibility [skip ci]"
+          git push origin HEAD:work/flash-musicnet
