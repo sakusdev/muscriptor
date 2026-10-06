@@ -1,7 +1,7 @@
 # MuScripter Flash real-audio training
 
 Flash uses a causal 128 ms audio window and predicts the active state of MIDI
-notes 21..108.  The training code is split into two stages:
+notes 21..108. The training code is split into two stages:
 
 1. `flash_neural.py` creates the small synthetic bootstrap checkpoint.
 2. real recordings fine-tune that checkpoint without changing the realtime
@@ -17,11 +17,11 @@ notes 21..108.  The training code is split into two stages:
   cross-dataset run has been completed and accepted.
 
 Do not treat a checkpoint as better just because it was trained on more data.
-Keep a held-out benchmark and only promote it after the target metrics improve.
+Keep held-out benchmarks and only promote it after the target metrics improve.
 
 ## Bach10
 
-`muscriptor.flash_realdata` is the small reproducible real-audio stage.  The
+`muscriptor.flash_realdata` is the small reproducible real-audio stage. The
 accepted checkpoint trains on eight Bach10 pieces and holds out the final two.
 The training workflow remains useful as a fast regression check because the
 whole dataset is small enough for a GitHub-hosted Actions runner.
@@ -30,13 +30,13 @@ whole dataset is small enough for a GitHub-hosted Actions runner.
 
 URMP contains 44 real chamber-music performances from duets through quintets.
 Each piece provides a mixture WAV, isolated instrument recordings, score files,
-and aligned `Notes_*.txt` annotations.  A note row contains onset time,
-frequency, and duration.  `muscriptor.flash_multidataset` converts these rows to
+and aligned `Notes_*.txt` annotations. A note row contains onset time,
+frequency, and duration. `muscriptor.flash_multidataset` converts these rows to
 an 88-key 10 ms activity grid and always builds each model input from samples at
 or before the target time.
 
 URMP is much larger than Bach10 (the full package is about 12.5 GB), so it is
-not downloaded automatically by normal CI.  Keep the dataset outside the Git
+not downloaded automatically by normal CI. Keep the dataset outside the Git
 repository and pass its extracted root explicitly.
 
 The URMP validation split follows the MT3/YourMT3-compatible test IDs:
@@ -47,10 +47,34 @@ The URMP validation split follows the MT3/YourMT3-compatible test IDs:
 
 The remaining available pieces are training data.
 
-## Train on URMP only
+## MusicNet
+
+MusicNet contains 330 real classical recordings and more than one million
+aligned note labels. The official archive contains these directories:
+
+```text
+train_data/
+train_labels/
+test_data/
+test_labels/
+```
+
+`muscriptor.flash_musicnet` pairs WAV and CSV files by recording ID and preserves
+that official train/test split. MusicNet's CSV `start_time` and `end_time` are
+sample indices on the original 44.1 kHz recording, not seconds. The adapter
+converts those indices to seconds, rasterizes the MIDI `note` column onto the
+same 10 ms 88-key grid, and resamples audio to Flash's 16 kHz input rate.
+
+The compressed MusicNet archive is about 11.1 GB and expands substantially, so
+normal CI never downloads it. Keep it in external/local storage and pass its
+extracted root with `--musicnet`.
+
+## Train on one dataset
 
 Start from the current Bach10 checkpoint so the model keeps the real-audio
-adaptation already learned there:
+adaptation already learned there.
+
+URMP only:
 
 ```bash
 uv run python -m muscriptor.flash_multidataset \
@@ -60,29 +84,42 @@ uv run python -m muscriptor.flash_multidataset \
   --metrics muscriptor/checkpoints/flash-neural-multidataset-metrics.json
 ```
 
-## Train on Bach10 + URMP
+MusicNet only:
 
-Install SciPy for the Bach10 MAT annotations, then pass both roots:
+```bash
+uv run python -m muscriptor.flash_multidataset \
+  --base muscriptor/checkpoints/flash-neural-bach10.pt \
+  --musicnet /data/musicnet \
+  --output muscriptor/checkpoints/flash-neural-multidataset.pt \
+  --metrics muscriptor/checkpoints/flash-neural-multidataset-metrics.json
+```
+
+## Train on Bach10 + URMP + MusicNet
+
+Install SciPy for the Bach10 MAT annotations, then pass all three roots:
 
 ```bash
 uv run --with scipy python -m muscriptor.flash_multidataset \
   --base muscriptor/checkpoints/flash-neural-bach10.pt \
   --bach10 /data/Bach10_v1.1 \
   --urmp /data/URMP \
+  --musicnet /data/musicnet \
   --output muscriptor/checkpoints/flash-neural-multidataset.pt \
   --metrics muscriptor/checkpoints/flash-neural-multidataset-metrics.json
 ```
 
+Any subset of `--bach10`, `--urmp`, and `--musicnet` is valid.
+
 Real batches choose the source dataset uniformly before choosing a piece and a
-frame.  This prevents the dataset with the most pieces from automatically
-swamping smaller sources.  By default 80% of each batch is real audio and 20%
+frame. This prevents MusicNet's much larger recording count from automatically
+swamping Bach10 or URMP. By default 80% of each batch is real audio and 20%
 remains synthetic so the model keeps exposure to a broad MIDI pitch range.
 
 ## Promotion rule
 
 A multi-dataset checkpoint should not replace `flash-neural-bach10.pt` in the
 runtime search order until it has been evaluated on data that was not used for
-training or threshold selection.  At minimum record:
+training or threshold selection. At minimum record:
 
 - global frame precision / recall / F1;
 - per-dataset precision / recall / F1;
@@ -93,10 +130,10 @@ training or threshold selection.  At minimum record:
 `flash_multidataset.py` writes the global and per-dataset holdout metrics into
 the checkpoint metadata and optional metrics JSON.
 
-## Next datasets
+## Next model step
 
-MusicNet is the next useful source after URMP because it contains hundreds of
-real classical recordings with note-level labels and a much wider collection of
-performances.  It is also roughly 11 GB, so support should follow the same
-pattern: local/external dataset storage, deterministic split, selective loading,
-and no unconditional download in normal CI.
+The data path now supports Bach10, URMP, and MusicNet without changing the
+realtime inference contract. The next quality step is to run a reproducible
+full multi-dataset training job outside normal CI, compare it against the
+Bach10-only checkpoint on every holdout set, and only then promote the resulting
+`flash-neural-multidataset.pt` into the runtime checkpoint search order.
