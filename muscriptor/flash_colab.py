@@ -1,9 +1,10 @@
 """Google Colab / Gradio frontend for MuScripter Flash.
 
-The Colab runtime cannot open the user's local microphone with PortAudio.
-Instead, the browser captures microphone audio and Gradio streams short chunks
-to the remote runtime. Flash then processes those chunks with the same
-``FlashEngine`` used by the native CLI.
+The Colab runtime cannot open the user's local microphone or local MIDI ports
+directly. Instead, the browser captures microphone audio and Gradio streams
+short chunks to the remote runtime. Flash processes those chunks with the same
+``FlashEngine`` used by the native CLI, then the detected MIDI events are sent
+back to the browser and forwarded to a local MIDI port through the Web MIDI API.
 
 The engine's own latency accounting excludes browser/network transport. The UI
 shows a rough server-side stream lag separately so Colab does not pretend to
@@ -12,6 +13,7 @@ provide a hard end-to-end 250 ms guarantee.
 
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -29,6 +31,94 @@ _WORKDIR.mkdir(parents=True, exist_ok=True)
 
 _NOTE_NAMES = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
 
+_WEB_MIDI_CONNECT_JS = r"""
+async (query) => {
+    if (!navigator.requestMIDIAccess) {
+        return ["Web MIDI is not supported by this browser. Use Chrome/Edge on desktop."];
+    }
+    try {
+        const access = await navigator.requestMIDIAccess();
+        const outputs = Array.from(access.outputs.values());
+        if (!outputs.length) {
+            return ["No local MIDI output ports found. Start loopMIDI or connect a MIDI device, then try again."];
+        }
+
+        const needle = (query || "").trim().toLowerCase();
+        let candidates = outputs;
+        if (needle) {
+            candidates = outputs.filter((port) =>
+                (port.name || "").toLowerCase().includes(needle) ||
+                (port.manufacturer || "").toLowerCase().includes(needle)
+            );
+        }
+
+        if (!candidates.length) {
+            const available = outputs.map((port) => port.name || port.id).join(", ");
+            return [`No MIDI output matched '${query}'. Available: ${available}`];
+        }
+        if (candidates.length > 1 && needle) {
+            const available = candidates.map((port) => port.name || port.id).join(", ");
+            return [`Multiple MIDI outputs matched '${query}': ${available}. Use a more specific name.`];
+        }
+
+        const output = candidates[0];
+        await output.open();
+        window.__muscriptorFlashMIDIAccess = access;
+        window.__muscriptorFlashMIDIOutput = output;
+        window.__muscriptorFlashLastSeq = -1;
+
+        access.onstatechange = () => {
+            if (window.__muscriptorFlashMIDIOutput?.state === "disconnected") {
+                window.__muscriptorFlashMIDIOutput = null;
+            }
+        };
+        return [`Realtime MIDI connected: ${output.name || output.id}`];
+    } catch (error) {
+        return [`Web MIDI access failed: ${error?.message || error}`];
+    }
+}
+"""
+
+_WEB_MIDI_SEND_JS = r"""
+(payload) => {
+    if (!payload || !window.__muscriptorFlashMIDIOutput) {
+        return [];
+    }
+    try {
+        const packet = JSON.parse(payload);
+        if (packet.seq === window.__muscriptorFlashLastSeq) {
+            return [];
+        }
+        window.__muscriptorFlashLastSeq = packet.seq;
+        for (const message of packet.messages || []) {
+            window.__muscriptorFlashMIDIOutput.send(message);
+        }
+    } catch (error) {
+        console.error("MuScripter Flash Web MIDI bridge error", error);
+    }
+    return [];
+}
+"""
+
+_WEB_MIDI_PANIC_JS = r"""
+() => {
+    const output = window.__muscriptorFlashMIDIOutput;
+    if (!output) {
+        return ["Realtime MIDI is not connected."];
+    }
+    try {
+        output.clear?.();
+        for (let channel = 0; channel < 16; channel++) {
+            output.send([0xB0 | channel, 123, 0]);
+            output.send([0xB0 | channel, 120, 0]);
+        }
+        return [`All Notes Off sent to ${output.name || output.id}`];
+    } catch (error) {
+        return [`MIDI panic failed: ${error?.message || error}`];
+    }
+}
+"""
+
 
 @dataclass
 class FlashColabState:
@@ -38,6 +128,7 @@ class FlashColabState:
     chunks: int = 0
     input_seconds: float = 0.0
     last_observed_lag_ms: float = 0.0
+    midi_seq: int = 0
 
 
 def _note_name(note: int) -> str:
@@ -108,6 +199,23 @@ def _event_line(event: FlashMidiEvent) -> str:
     return f"{event.stream_time:7.3f}s  OFF  {name:4s}"
 
 
+def _web_midi_payload(
+    state: FlashColabState,
+    events: list[FlashMidiEvent],
+) -> str:
+    state.midi_seq += 1
+    messages: list[list[int]] = []
+    for event in events:
+        if event.type == "note_on":
+            messages.append([0x90, int(event.note), int(event.velocity)])
+        else:
+            messages.append([0x80, int(event.note), 0])
+    return json.dumps(
+        {"seq": state.midi_seq, "messages": messages},
+        separators=(",", ":"),
+    )
+
+
 def _status(state: FlashColabState, extra: str | None = None) -> str:
     engine = state.engine
     stats = engine.stats
@@ -134,7 +242,7 @@ def start_flash(
     confidence: float,
     release_frames: int,
     max_polyphony: int,
-) -> tuple[FlashColabState, str, None]:
+) -> tuple[FlashColabState, str, None, str]:
     """Reset Flash state when browser microphone recording starts."""
     state = _new_state(
         window_ms=window_ms,
@@ -147,27 +255,30 @@ def start_flash(
         state,
         _status(state, "Flash started. Play an instrument into the microphone."),
         None,
+        _web_midi_payload(state, []),
     )
 
 
 def process_stream(
     audio: tuple[int, np.ndarray] | None,
     state: FlashColabState | None,
-) -> tuple[FlashColabState, str]:
-    """Process one browser microphone chunk."""
+) -> tuple[FlashColabState, str, str]:
+    """Process one browser microphone chunk and return realtime MIDI messages."""
     if state is None:
         state = _new_state()
 
     pcm, input_seconds = _audio_to_flash_pcm(audio, state.engine.config.sample_rate)
+    emitted: list[FlashMidiEvent] = []
     if pcm.size:
-        state.events.extend(state.engine.process_block(pcm))
+        emitted = state.engine.process_block(pcm)
+        state.events.extend(emitted)
         state.chunks += 1
         state.input_seconds += input_seconds
 
         elapsed = time.perf_counter() - state.started_at
         state.last_observed_lag_ms = max(0.0, (elapsed - state.input_seconds) * 1000.0)
 
-    return state, _status(state)
+    return state, _status(state), _web_midi_payload(state, emitted)
 
 
 def _write_midi(events: list[FlashMidiEvent], output: Path) -> None:
@@ -214,19 +325,36 @@ def _write_midi(events: list[FlashMidiEvent], output: Path) -> None:
 
 def stop_flash(
     state: FlashColabState | None,
-) -> tuple[FlashColabState, str | None, str]:
-    """Flush active notes and export the live event stream to a MIDI file."""
+) -> tuple[FlashColabState, str | None, str, str]:
+    """Flush active notes, send NoteOffs, and export the live event stream."""
     if state is None:
         state = _new_state()
-        return state, None, _status(state, "No Flash session was active.")
+        return (
+            state,
+            None,
+            _status(state, "No Flash session was active."),
+            _web_midi_payload(state, []),
+        )
 
-    state.events.extend(state.engine.all_notes_off())
+    flushed = state.engine.all_notes_off()
+    state.events.extend(flushed)
+    payload = _web_midi_payload(state, flushed)
     if not state.events:
-        return state, None, _status(state, "Stopped. No MIDI notes were detected.")
+        return (
+            state,
+            None,
+            _status(state, "Stopped. No MIDI notes were detected."),
+            payload,
+        )
 
     output = _WORKDIR / f"muscriptor-flash-{int(time.time())}.mid"
     _write_midi(state.events, output)
-    return state, str(output), _status(state, f"Stopped. MIDI saved as {output.name}")
+    return (
+        state,
+        str(output),
+        _status(state, f"Stopped. MIDI saved as {output.name}"),
+        payload,
+    )
 
 
 def process_uploaded_file(
@@ -281,12 +409,15 @@ def build_app():
             """
 # MuScripter Flash · Colab
 
-Live browser microphone → streamed audio chunks → **FlashEngine** → MIDI events.
+Live browser microphone → streamed audio chunks → **FlashEngine** → **local realtime MIDI**.
 
-The native Flash target is **≤250 ms NoteOn latency**. In Colab, browser/network
+The browser can forward Flash NoteOn/NoteOff events directly to a local MIDI output
+through Web MIDI. This lets Colab do the analysis while loopMIDI, a hardware MIDI
+port, or a DAW on your PC receives the notes in realtime.
+
+The native Flash target is **≤250 ms NoteOn latency**. Colab browser/network
 transport is additional and variable, so the UI reports Flash DSP latency and a
-rough transport/queue lag separately. For hard realtime use, run
-`muscriptor-flash live` locally.
+rough transport/queue lag separately.
 """
         )
 
@@ -306,6 +437,44 @@ rough transport/queue lag separately. For hard realtime use, run
                 )
 
         with gr.Tab("Live microphone"):
+            gr.Markdown(
+                """
+### 1. Connect local MIDI
+
+Create/start your local virtual MIDI port first (for example loopMIDI), enter a
+unique part of its name below, then press **Connect realtime MIDI**. Your browser
+will ask for MIDI-device permission.
+"""
+            )
+            with gr.Row():
+                midi_port_query = gr.Textbox(
+                    value="loopMIDI",
+                    label="Local MIDI output name / substring",
+                )
+                connect_midi = gr.Button("Connect realtime MIDI", variant="primary")
+                panic_midi = gr.Button("Panic / All Notes Off")
+            midi_connection_status = gr.Textbox(
+                label="Web MIDI",
+                value="Not connected",
+                interactive=False,
+            )
+
+            connect_midi.click(
+                fn=None,
+                inputs=[midi_port_query],
+                outputs=[midi_connection_status],
+                js=_WEB_MIDI_CONNECT_JS,
+                queue=False,
+            )
+            panic_midi.click(
+                fn=None,
+                inputs=None,
+                outputs=[midi_connection_status],
+                js=_WEB_MIDI_PANIC_JS,
+                queue=False,
+            )
+
+            gr.Markdown("### 2. Start microphone streaming")
             microphone = gr.Audio(
                 label="Microphone",
                 sources=["microphone"],
@@ -319,6 +488,7 @@ rough transport/queue lag separately. For hard realtime use, run
                 lines=24,
                 interactive=False,
             )
+            midi_bridge = gr.Textbox(visible=False, value="")
 
             microphone.start_recording(
                 fn=start_flash,
@@ -329,13 +499,13 @@ rough transport/queue lag separately. For hard realtime use, run
                     release_frames,
                     max_polyphony,
                 ],
-                outputs=[live_state, live_status, live_midi],
+                outputs=[live_state, live_status, live_midi, midi_bridge],
                 queue=False,
             )
             microphone.stream(
                 fn=process_stream,
                 inputs=[microphone, live_state],
-                outputs=[live_state, live_status],
+                outputs=[live_state, live_status, midi_bridge],
                 stream_every=0.1,
                 time_limit=600,
                 concurrency_limit=1,
@@ -344,7 +514,14 @@ rough transport/queue lag separately. For hard realtime use, run
             microphone.stop_recording(
                 fn=stop_flash,
                 inputs=[live_state],
-                outputs=[live_state, live_midi, live_status],
+                outputs=[live_state, live_midi, live_status, midi_bridge],
+            )
+            midi_bridge.change(
+                fn=None,
+                inputs=[midi_bridge],
+                outputs=None,
+                js=_WEB_MIDI_SEND_JS,
+                queue=False,
             )
 
         with gr.Tab("Uploaded audio benchmark"):
@@ -375,9 +552,10 @@ rough transport/queue lag separately. For hard realtime use, run
 
         gr.Markdown(
             """
-**Tip:** Chrome/Edge usually gives the most reliable microphone permission in
-Colab. If the inline widget cannot access the microphone, open the Gradio frame
-in a new tab and grant microphone permission there.
+**Browser note:** Web MIDI is not available in every browser. Desktop Chrome/Edge
+is the recommended path. MIDI access requires a secure context and explicit
+browser permission. If the inline Colab frame blocks MIDI permission, open the
+Gradio frame in a new tab and connect from there.
 """
         )
 
