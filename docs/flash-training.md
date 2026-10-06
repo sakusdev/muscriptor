@@ -124,6 +124,49 @@ frame. This prevents MusicNet's much larger recording count from automatically
 swamping Bach10 or URMP. By default 80% of each batch is real audio and 20%
 remains synthetic so the model keeps exposure to a broad MIDI pitch range.
 
+## Resume long training runs
+
+URMP and especially MusicNet can make a useful training run much longer than a
+Bach10 regression run. Use `--state-output` to save an interruption-safe state
+periodically:
+
+```bash
+uv run python -m muscriptor.flash_multidataset \
+  --base muscriptor/checkpoints/flash-neural-bach10.pt \
+  --musicnet /data/musicnet \
+  --steps 3000 \
+  --state-output /data/flash-training-state.pt \
+  --save-every 50 \
+  --output muscriptor/checkpoints/flash-neural-multidataset.pt
+```
+
+The state file contains the current model, optimizer, best model so far,
+baseline/best metrics, current step, and Python/NumPy/Torch random-number states.
+It is written to a temporary file and atomically replaces the previous state so
+an interrupted write is less likely to destroy the last usable checkpoint.
+
+Resume by passing the same training configuration and a larger or equal final
+`--steps` target:
+
+```bash
+uv run python -m muscriptor.flash_multidataset \
+  --base muscriptor/checkpoints/flash-neural-bach10.pt \
+  --musicnet /data/musicnet \
+  --steps 3000 \
+  --resume-state /data/flash-training-state.pt \
+  --output muscriptor/checkpoints/flash-neural-multidataset.pt
+```
+
+If `--state-output` is omitted while resuming, the file passed to
+`--resume-state` is updated in place. A resume state is rejected if the dataset
+piece lists, batch size, learning rate, real-data fraction, evaluation cadence,
+seed, or base-backend identity differ from the saved configuration. The initial
+holdout baseline is also restored from the state instead of being recomputed.
+
+`--steps` means the **final step number**, not “additional steps.” For example,
+a state saved at step 1200 with `--steps 3000` continues from step 1201 through
+3000.
+
 ## Promotion rule
 
 A multi-dataset checkpoint should not replace `flash-neural-bach10.pt` in the
@@ -142,7 +185,8 @@ the checkpoint metadata and optional metrics JSON.
 ## Next model step
 
 The data path now supports Bach10, URMP, and MusicNet without changing the
-realtime inference contract. The next quality step is to run a reproducible
-full multi-dataset training job outside normal CI, compare it against the
-Bach10-only checkpoint on every holdout set, and only then promote the resulting
-`flash-neural-multidataset.pt` into the runtime checkpoint search order.
+realtime inference contract. Long runs are resumable and autosaved. The next
+quality step is to run a reproducible full multi-dataset training job outside
+normal CI, compare it against the Bach10-only checkpoint on every holdout set,
+and only then promote the resulting `flash-neural-multidataset.pt` into the
+runtime checkpoint search order.
