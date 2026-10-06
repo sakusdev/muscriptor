@@ -14,6 +14,7 @@ import copy
 import json
 import math
 import random
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -41,10 +42,11 @@ class TimedPiece:
 
     name: str
     dataset: str
-    audio: torch.Tensor
+    audio: torch.Tensor | None
     labels: torch.Tensor
     frame_origin_seconds: float
     frame_hop_seconds: float
+    window_loader: Callable[[float], torch.Tensor] | None = None
 
 
 def _bach10_to_timed() -> tuple[float, float]:
@@ -167,6 +169,16 @@ def _causal_window(piece: TimedPiece, frame_index: int) -> torch.Tensor:
         raise IndexError(frame_index)
 
     target_seconds = piece.frame_origin_seconds + frame_index * piece.frame_hop_seconds
+    if piece.window_loader is not None:
+        frame = piece.window_loader(target_seconds).reshape(-1)
+        if frame.numel() < _WINDOW_SAMPLES:
+            frame = torch.nn.functional.pad(frame, (_WINDOW_SAMPLES - frame.numel(), 0))
+        elif frame.numel() > _WINDOW_SAMPLES:
+            frame = frame[-_WINDOW_SAMPLES:]
+        return frame.contiguous()
+    if piece.audio is None:
+        raise ValueError(f"{piece.dataset}/{piece.name} has no audio source")
+
     end = round(target_seconds * _SAMPLE_RATE)
     start = end - _WINDOW_SAMPLES
 
