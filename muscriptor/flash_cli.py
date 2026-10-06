@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -82,7 +83,7 @@ def live(
         int,
         typer.Option(
             "--max-polyphony",
-            help="Maximum simultaneous MIDI notes emitted by the MVP detector.",
+            help="Maximum simultaneous MIDI notes emitted by the detector.",
         ),
     ] = 12,
     attack_frames: Annotated[
@@ -99,6 +100,16 @@ def live(
             help="Missing frames required before NoteOff.",
         ),
     ] = 3,
+    neural_checkpoint: Annotated[
+        str | None,
+        typer.Option(
+            "--neural-checkpoint",
+            help=(
+                "Path to a trained Flash neural .pt checkpoint. If omitted, "
+                "the bundled trained checkpoint is used when available."
+            ),
+        ),
+    ] = None,
     verbose: Annotated[
         bool,
         typer.Option("--verbose", "-v", help="Print emitted MIDI events and latency."),
@@ -135,7 +146,37 @@ def live(
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(1)
 
-    # Numeric strings are the most convenient form for sounddevice device IDs.
+    bundled_checkpoint = (
+        Path(__file__).with_name("checkpoints") / "flash-neural-synthetic.pt"
+    )
+    checkpoint: Path | None
+    explicit_checkpoint = neural_checkpoint is not None
+    if explicit_checkpoint:
+        checkpoint = Path(neural_checkpoint)
+    elif bundled_checkpoint.is_file():
+        checkpoint = bundled_checkpoint
+    else:
+        checkpoint = None
+
+    detector = None
+    backend = "spectral fallback"
+    if checkpoint is not None:
+        try:
+            from muscriptor.flash_neural import NeuralPitchDetector
+
+            detector = NeuralPitchDetector(config, checkpoint)
+            backend = f"neural ({checkpoint.name})"
+        except (OSError, RuntimeError, ValueError, KeyError) as exc:
+            if explicit_checkpoint:
+                sink.close()
+                typer.echo(f"Error loading neural checkpoint: {exc}", err=True)
+                raise typer.Exit(1)
+            typer.echo(
+                f"Warning: bundled neural checkpoint could not be loaded ({exc}); "
+                "falling back to the spectral detector.",
+                err=True,
+            )
+
     resolved_device: int | str | None = input_device
     if input_device is not None:
         try:
@@ -143,7 +184,7 @@ def live(
         except ValueError:
             pass
 
-    engine = FlashEngine(config)
+    engine = FlashEngine(config, detector=detector)
     session = LiveFlashSession(
         engine=engine,
         sink=sink,
@@ -151,6 +192,7 @@ def live(
     )
 
     typer.echo("MuScripter Flash")
+    typer.echo(f"  backend: {backend}")
     typer.echo(f"  MIDI: {sink.name}")
     typer.echo(
         f"  analysis: {config.window_ms:.0f} ms window / {config.hop_ms:.0f} ms hop"
