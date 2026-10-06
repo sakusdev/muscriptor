@@ -22,7 +22,9 @@ import torch
 from muscriptor.flash import FlashConfig, FlashEngine, FlashMidiEvent
 from muscriptor.utils.audio import resample
 
-_WORKDIR = Path("/content/muscriptor-flash") if Path("/content").exists() else Path.cwd()
+_WORKDIR = (
+    Path("/content/muscriptor-flash") if Path("/content").exists() else Path.cwd()
+)
 _WORKDIR.mkdir(parents=True, exist_ok=True)
 
 _NOTE_NAMES = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
@@ -110,7 +112,10 @@ def _status(state: FlashColabState, extra: str | None = None) -> str:
     engine = state.engine
     stats = engine.stats
     active = ", ".join(_note_name(note) for note in sorted(engine.active_notes)) or "—"
-    recent = "\n".join(_event_line(event) for event in state.events[-18:]) or "(waiting for notes)"
+    recent = (
+        "\n".join(_event_line(event) for event in state.events[-18:])
+        or "(waiting for notes)"
+    )
     prefix = f"{extra}\n\n" if extra else ""
     return (
         f"{prefix}Active notes: {active}\n"
@@ -138,7 +143,11 @@ def start_flash(
         release_frames=release_frames,
         max_polyphony=max_polyphony,
     )
-    return state, _status(state, "Flash started. Play an instrument into the microphone."), None
+    return (
+        state,
+        _status(state, "Flash started. Play an instrument into the microphone."),
+        None,
+    )
 
 
 def process_stream(
