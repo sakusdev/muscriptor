@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -104,8 +105,8 @@ def live(
         typer.Option(
             "--neural-checkpoint",
             help=(
-                "Path to a trained Flash neural .pt checkpoint. "
-                "If omitted, use the spectral MVP detector."
+                "Path to a trained Flash neural .pt checkpoint. If omitted, "
+                "the bundled trained checkpoint is used when available."
             ),
         ),
     ] = None,
@@ -145,20 +146,37 @@ def live(
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(1)
 
+    bundled_checkpoint = (
+        Path(__file__).with_name("checkpoints") / "flash-neural-synthetic.pt"
+    )
+    checkpoint: Path | None
+    explicit_checkpoint = neural_checkpoint is not None
+    if explicit_checkpoint:
+        checkpoint = Path(neural_checkpoint)
+    elif bundled_checkpoint.is_file():
+        checkpoint = bundled_checkpoint
+    else:
+        checkpoint = None
+
     detector = None
-    backend = "spectral"
-    if neural_checkpoint is not None:
+    backend = "spectral fallback"
+    if checkpoint is not None:
         try:
             from muscriptor.flash_neural import NeuralPitchDetector
 
-            detector = NeuralPitchDetector(config, neural_checkpoint)
-            backend = f"neural ({neural_checkpoint})"
+            detector = NeuralPitchDetector(config, checkpoint)
+            backend = f"neural ({checkpoint.name})"
         except (OSError, RuntimeError, ValueError, KeyError) as exc:
-            sink.close()
-            typer.echo(f"Error loading neural checkpoint: {exc}", err=True)
-            raise typer.Exit(1)
+            if explicit_checkpoint:
+                sink.close()
+                typer.echo(f"Error loading neural checkpoint: {exc}", err=True)
+                raise typer.Exit(1)
+            typer.echo(
+                f"Warning: bundled neural checkpoint could not be loaded ({exc}); "
+                "falling back to the spectral detector.",
+                err=True,
+            )
 
-    # Numeric strings are the most convenient form for sounddevice device IDs.
     resolved_device: int | str | None = input_device
     if input_device is not None:
         try:
