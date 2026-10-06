@@ -101,7 +101,7 @@ def _labels_from_musicnet_csv(
         # Label index i represents time (i + 1) * 10 ms.  MusicNet intervals
         # are half-open, so activate frames at/after onset and before offset.
         start = max(0, math.ceil(onset / _MUSICNET_HOP_SECONDS) - 1)
-        stop = max(start + 1, math.ceil(offset / _MUSICNET_HOP_SECONDS) - 1)
+        stop = max(0, math.ceil(offset / _MUSICNET_HOP_SECONDS) - 1)
         start = min(start, frame_count)
         stop = min(stop, frame_count)
         if start < stop:

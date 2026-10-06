@@ -111,7 +111,7 @@ def _labels_from_urmp_notes(
             # Label index i represents time (i + 1) * 10 ms.  Pick the first
             # frame at/after onset and stop before the note offset.
             start = max(0, math.ceil(onset / _URMP_HOP_SECONDS) - 1)
-            stop = max(start + 1, math.ceil(offset / _URMP_HOP_SECONDS) - 1)
+            stop = max(0, math.ceil(offset / _URMP_HOP_SECONDS) - 1)
             start = min(start, frame_count)
             stop = min(stop, frame_count)
             if start < stop:
@@ -192,7 +192,7 @@ def _split_datasets(
     *,
     bach10: str | Path | None,
     urmp: str | Path | None,
-    musicnet: str | Path | None,
+    musicnet: str | Path | None = None,
 ) -> tuple[dict[str, list[TimedPiece]], dict[str, list[TimedPiece]]]:
     train: dict[str, list[TimedPiece]] = {}
     validation: dict[str, list[TimedPiece]] = {}
