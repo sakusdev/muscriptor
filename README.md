@@ -42,13 +42,13 @@ and accept the CC BY-NC 4.0 license.
 
 The weights are then automatically downloaded on first use and cached locally.
 
-> **MuScripter Flash is different:** the current Flash realtime spectral backend
-> does not use the Hugging Face transformer weights, so Hugging Face login is not
-> required for Flash itself.
+> **MuScripter Flash is different:** Flash ships its own low-latency neural
+> checkpoints and does not use the Hugging Face transformer weights, so Hugging
+> Face login is not required for Flash itself.
 
 ## Google Colab
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/sakusdev/muscriptor/blob/work/expressive-midi/notebooks/MuScriptor_Colab.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/sakusdev/muscriptor/blob/main/notebooks/MuScriptor_Colab.ipynb)
 
 The Colab notebook provides an inline **Gradio** UI for:
 
@@ -81,15 +81,24 @@ Current defaults:
 - 250 ms NoteOn latency budget
 - immediate NoteOn path
 - debounced NoteOff path
-- polyphonic spectral pitch detection
+- **88-key neural multi-pitch detection**
 - dynamic MIDI velocity
 - All Notes Off / panic handling
 
-The current Flash detector is a lightweight realtime MVP. It establishes the
-streaming, timing, MIDI-state and device pipeline, but it is **not expected to
-match the normal MuScriptor transformer on difficult mixes or instrument
-separation**. The intended next step is a causal neural Flash backend using the
-same streaming API.
+Flash automatically selects the best bundled realtime backend in this order:
+
+1. `flash-neural-bach10.pt` — neural model fine-tuned on real Bach10 recordings
+2. `flash-neural-synthetic.pt` — synthetic neural bootstrap model
+3. the deterministic spectral detector as a final fallback
+
+The neural model sees only the current 128 ms window and never future audio, so
+it preserves the realtime streaming contract. The Bach10 fine-tuned checkpoint
+starts from the synthetic model and was trained on 8 real-recorded Bach10 pieces
+with 2 pieces held out. On that held-out split, frame-level 88-key F1 improved
+from **0.552 to 0.700** (precision **0.617**, recall **0.808**). These numbers are
+a narrow Bach10 validation result, not a claim of production accuracy across all
+instruments, microphones, genres or mixes. The normal MuScriptor transformer is
+still the high-accuracy choice for offline transcription.
 
 ### Local Flash setup
 
@@ -112,6 +121,15 @@ Start realtime transcription to a MIDI output:
 
 ```bash
 uv run muscriptor-flash live --midi-port "loopMIDI Port"
+```
+
+The best bundled neural checkpoint is loaded automatically. To force a specific
+checkpoint, use:
+
+```bash
+uv run muscriptor-flash live \
+  --midi-port "loopMIDI Port" \
+  --neural-checkpoint path/to/flash-model.pt
 ```
 
 The MIDI port can be an exact name or a unique substring. If the machine has
@@ -228,6 +246,15 @@ Colab is remote, so its **250 ms target is not an end-to-end latency guarantee**
 Browser capture, network transport, Gradio streaming and notebook scheduling are
 added on top of Flash processing. The transport cadence is approximately 32 ms,
 but actual round-trip latency depends on the network and Colab runtime.
+
+### Re-training the Flash neural model
+
+The repository contains both synthetic bootstrap training and real-recording
+fine-tuning code. The real-data path is in `muscriptor/flash_realdata.py` and the
+manual GitHub Actions workflow is `.github/workflows/train-flash-bach10.yml`.
+That workflow downloads Bach10, fine-tunes the synthetic checkpoint, requires an
+improvement on the held-out pieces, smoke-tests the checkpoint, uploads an
+artifact, and commits the accepted model back to the development branch.
 
 For more implementation details, see [`docs/flash.md`](docs/flash.md).
 
