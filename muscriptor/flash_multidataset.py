@@ -1,7 +1,8 @@
 """Multi-dataset real-audio fine-tuning for MuScripter Flash.
 
-This module extends the Bach10-only real-data path with URMP.  URMP provides
-aligned note annotations for real multi-instrument performances.  Training
+This module extends the Bach10-only real-data path with URMP and MusicNet.
+Both provide aligned note annotations for real multi-instrument performances.
+Training
 remains causal: each target is predicted from only the audio that has arrived
 up to that target time.
 """
@@ -191,6 +192,7 @@ def _split_datasets(
     *,
     bach10: str | Path | None,
     urmp: str | Path | None,
+    musicnet: str | Path | None,
 ) -> tuple[dict[str, list[TimedPiece]], dict[str, list[TimedPiece]]]:
     train: dict[str, list[TimedPiece]] = {}
     validation: dict[str, list[TimedPiece]] = {}
@@ -222,8 +224,15 @@ def _split_datasets(
         train["URMP"] = urmp_train
         validation["URMP"] = urmp_validation
 
+    if musicnet is not None:
+        from muscriptor.flash_musicnet import load_musicnet
+
+        musicnet_train, musicnet_test = load_musicnet(musicnet)
+        train["MusicNet"] = musicnet_train
+        validation["MusicNet"] = musicnet_test
+
     if not train:
-        raise ValueError("provide at least one of --bach10 or --urmp")
+        raise ValueError("provide at least one of --bach10, --urmp, or --musicnet")
     return train, validation
 
 
@@ -320,6 +329,7 @@ def finetune_multidataset(
     *,
     bach10: str | Path | None = None,
     urmp: str | Path | None = None,
+    musicnet: str | Path | None = None,
     metrics_path: str | Path | None = None,
     steps: int = 600,
     batch_size: int = 32,
@@ -340,7 +350,9 @@ def finetune_multidataset(
     np_rng = np.random.default_rng(seed)
     torch.set_num_threads(max(1, min(4, torch.get_num_threads())))
 
-    train_sets, validation_sets = _split_datasets(bach10=bach10, urmp=urmp)
+    train_sets, validation_sets = _split_datasets(
+        bach10=bach10, urmp=urmp, musicnet=musicnet
+    )
     payload = torch.load(Path(base_checkpoint), map_location="cpu", weights_only=False)
     metadata = dict(payload.get("metadata", {}))
     geometry = (
@@ -484,6 +496,7 @@ def main() -> None:
     parser.add_argument("--output", required=True)
     parser.add_argument("--bach10")
     parser.add_argument("--urmp")
+    parser.add_argument("--musicnet")
     parser.add_argument("--metrics")
     parser.add_argument("--steps", type=int, default=600)
     parser.add_argument("--batch-size", type=int, default=32)
@@ -498,6 +511,7 @@ def main() -> None:
         args.output,
         bach10=args.bach10,
         urmp=args.urmp,
+        musicnet=args.musicnet,
         metrics_path=args.metrics,
         steps=args.steps,
         batch_size=args.batch_size,
