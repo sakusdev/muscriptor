@@ -57,6 +57,12 @@ dependencies = [
     "beat-this>=1.1",  # Tempo and downbeat tracking
 ]
 
+[project.optional-dependencies]
+flash = [
+    "sounddevice>=0.5",
+    "python-rtmidi>=1.5",
+]
+
 [project.urls]
 Homepage = "https://github.com/muscriptor/muscriptor"
 Repository = "https://github.com/muscriptor/muscriptor"
@@ -64,6 +70,7 @@ Issues = "https://github.com/muscriptor/muscriptor/issues"
 
 [project.scripts]
 muscriptor = "muscriptor.main:main"
+muscriptor-flash = "muscriptor.flash_cli:main"
 
 [tool.hatch.build]
 # The built frontend is gitignored but must ship in the sdist/wheel so that
