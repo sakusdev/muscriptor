@@ -1,0 +1,91 @@
+name: train-flash-bach10
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: train-flash-bach10-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  finetune:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: work/flash-realdata
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - run: uv python install 3.12
+      - run: uv sync --dev
+
+      - name: Download Bach10 real-recording dataset
+        run: >-
+          git clone --depth 1
+          https://github.com/flippy-fyp/Bach10_v1.1.git
+          /tmp/Bach10_v1.1
+
+      - name: Fine-tune Flash on real recordings
+        run: >-
+          uv run --with scipy python -m muscriptor.flash_realdata finetune
+          --dataset /tmp/Bach10_v1.1
+          --base muscriptor/checkpoints/flash-neural-synthetic.pt
+          --output muscriptor/checkpoints/flash-neural-bach10.pt
+          --metrics muscriptor/checkpoints/flash-neural-bach10-metrics.json
+          --steps 300
+          --batch-size 32
+          --real-fraction 0.75
+          --eval-every 50
+          --seed 20261007
+
+      - name: Require a real-audio holdout improvement
+        run: |
+          uv run python - <<'PY'
+          import json
+          from pathlib import Path
+          metrics = json.loads(Path('muscriptor/checkpoints/flash-neural-bach10-metrics.json').read_text())
+          print('baseline F1:', metrics['baseline_f1'])
+          print('fine-tuned F1:', metrics['f1'])
+          print('best step:', metrics['best_step'])
+          if metrics['f1'] <= metrics['baseline_f1'] + 1e-6:
+              raise SystemExit('Bach10 fine-tuning did not improve holdout F1')
+          PY
+
+      - name: Smoke-test real-audio checkpoint
+        run: >-
+          uv run python -m muscriptor.flash_neural smoke
+          muscriptor/checkpoints/flash-neural-bach10.pt
+
+      - name: Upload real-audio checkpoint artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: muscriptor-flash-neural-bach10
+          path: |
+            muscriptor/checkpoints/flash-neural-bach10.pt
+            muscriptor/checkpoints/flash-neural-bach10-metrics.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Commit fine-tuned checkpoint to branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f muscriptor/checkpoints/flash-neural-bach10.pt
+          git add -f muscriptor/checkpoints/flash-neural-bach10-metrics.json
+          if git diff --cached --quiet; then
+            echo "Checkpoint unchanged; nothing to commit."
+            exit 0
+          fi
+          git commit -m "Fine-tune Flash neural model on Bach10 [skip ci]"
+          git reset --hard HEAD
+          git clean -fd
+          git fetch origin work/flash-realdata
+          git rebase origin/work/flash-realdata
+          git push origin HEAD:work/flash-realdata
