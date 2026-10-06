@@ -34,7 +34,7 @@ def test_audio_bridge_normalizes_int16_and_resamples():
 
 
 def test_streaming_session_exports_midi(tmp_path: Path, monkeypatch):
-    import muscriptor.flash_colab as flash_colab
+    from muscriptor import flash_colab
 
     monkeypatch.setattr(flash_colab, "_WORKDIR", tmp_path)
     state, _, _ = start_flash(128, 32, 0.40, 2, 8)
