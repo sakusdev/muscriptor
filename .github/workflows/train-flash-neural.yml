@@ -37,7 +37,7 @@ jobs:
           uv run python -m muscriptor.flash_neural train
           --output muscriptor/checkpoints/flash-neural-synthetic.pt
           --metrics muscriptor/checkpoints/flash-neural-metrics.json
-          --steps 300
+          --steps 500
           --batch-size 32
           --seed 20261006
 
