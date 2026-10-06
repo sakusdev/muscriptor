@@ -43,7 +43,9 @@ def test_a4_note_on_and_note_off():
     engine = FlashEngine(FlashConfig(min_confidence=0.40, release_frames=2))
 
     on_events = _feed(engine, _tone([440.0], 0.45))
-    a4_on = [event for event in on_events if event.type == "note_on" and event.note == 69]
+    a4_on = [
+        event for event in on_events if event.type == "note_on" and event.note == 69
+    ]
     assert a4_on
     assert a4_on[0].latency_ms < 250.0
     assert 1 <= a4_on[0].velocity <= 127
