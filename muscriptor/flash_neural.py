@@ -107,8 +107,6 @@ class NeuralPitchDetector:
         if rms < self.config.silence_rms:
             return {}
 
-        # Match the scale seen during synthetic training while avoiding gain
-        # sensitivity from microphone/driver differences.
         peak = max(float(np.max(np.abs(array))), 1e-6)
         normalized = np.clip(array / peak, -1.0, 1.0)
         tensor = torch.from_numpy(normalized).to(self.device).unsqueeze(0)
@@ -150,9 +148,6 @@ def _synth_one(
     audio = np.zeros(samples, dtype=np.float32)
     t = np.arange(samples, dtype=np.float32) / float(sample_rate)
 
-    # Silence is important: otherwise BCE can learn that at least one note is
-    # always present. Most examples are 1-4 note mixtures to keep the bootstrap
-    # problem learnable on a CPU-only Actions runner.
     if rng.random() < 0.12:
         note_count = 0
     else:
@@ -186,11 +181,8 @@ def _synth_one(
             )
             audio += amplitude * partial * envelope
 
-    noise = np.asarray(
-        [rng.gauss(0.0, rng.uniform(0.002, 0.02)) for _ in range(samples)],
-        dtype=np.float32,
-    )
-    audio += noise
+    noise_sigma = rng.uniform(0.002, 0.02)
+    audio += np.random.normal(0.0, noise_sigma, size=samples).astype(np.float32)
     audio *= rng.uniform(0.55, 1.0)
     peak = max(float(np.max(np.abs(audio))), 1.0)
     return np.clip(audio / peak, -1.0, 1.0), label
@@ -220,7 +212,11 @@ def synthetic_batch(
     return torch.from_numpy(audio), torch.from_numpy(labels)
 
 
-def _metrics(logits: torch.Tensor, targets: torch.Tensor, threshold: float = 0.45) -> dict[str, float]:
+def _metrics(
+    logits: torch.Tensor,
+    targets: torch.Tensor,
+    threshold: float = 0.45,
+) -> dict[str, float]:
     predictions = torch.sigmoid(logits) >= threshold
     truth = targets >= 0.5
     tp = float((predictions & truth).sum().item())
@@ -236,7 +232,7 @@ def train_synthetic(
     output: str | Path,
     *,
     metrics_path: str | Path | None = None,
-    steps: int = 600,
+    steps: int = 300,
     batch_size: int = 32,
     learning_rate: float = 2e-3,
     seed: int = 20261006,
@@ -330,7 +326,7 @@ def main() -> None:
     train = subparsers.add_parser("train", help="train the synthetic bootstrap model")
     train.add_argument("--output", required=True)
     train.add_argument("--metrics")
-    train.add_argument("--steps", type=int, default=600)
+    train.add_argument("--steps", type=int, default=300)
     train.add_argument("--batch-size", type=int, default=32)
     train.add_argument("--learning-rate", type=float, default=2e-3)
     train.add_argument("--seed", type=int, default=20261006)
