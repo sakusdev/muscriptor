@@ -22,6 +22,16 @@ app = typer.Typer(
 )
 
 
+def _bundled_neural_checkpoints() -> list[Path]:
+    directory = Path(__file__).with_name("checkpoints")
+    # Prefer a checkpoint fine-tuned on real recordings.  The synthetic model
+    # remains a useful fallback when a real-data checkpoint is not bundled.
+    return [
+        directory / "flash-neural-bach10.pt",
+        directory / "flash-neural-synthetic.pt",
+    ]
+
+
 @app.command()
 def live(
     midi_port: Annotated[
@@ -106,7 +116,7 @@ def live(
             "--neural-checkpoint",
             help=(
                 "Path to a trained Flash neural .pt checkpoint. If omitted, "
-                "the bundled trained checkpoint is used when available."
+                "the best bundled checkpoint is selected automatically."
             ),
         ),
     ] = None,
@@ -146,36 +156,36 @@ def live(
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(1)
 
-    bundled_checkpoint = (
-        Path(__file__).with_name("checkpoints") / "flash-neural-synthetic.pt"
-    )
-    checkpoint: Path | None
     explicit_checkpoint = neural_checkpoint is not None
     if explicit_checkpoint:
-        checkpoint = Path(neural_checkpoint)
-    elif bundled_checkpoint.is_file():
-        checkpoint = bundled_checkpoint
+        candidates = [Path(neural_checkpoint)]
     else:
-        checkpoint = None
+        candidates = [path for path in _bundled_neural_checkpoints() if path.is_file()]
 
     detector = None
     backend = "spectral fallback"
-    if checkpoint is not None:
-        try:
-            from muscriptor.flash_neural import NeuralPitchDetector
+    load_errors: list[str] = []
+    if candidates:
+        from muscriptor.flash_neural import NeuralPitchDetector
 
-            detector = NeuralPitchDetector(config, checkpoint)
-            backend = f"neural ({checkpoint.name})"
-        except (OSError, RuntimeError, ValueError, KeyError) as exc:
-            if explicit_checkpoint:
-                sink.close()
-                typer.echo(f"Error loading neural checkpoint: {exc}", err=True)
-                raise typer.Exit(1)
-            typer.echo(
-                f"Warning: bundled neural checkpoint could not be loaded ({exc}); "
-                "falling back to the spectral detector.",
-                err=True,
-            )
+        for checkpoint in candidates:
+            try:
+                detector = NeuralPitchDetector(config, checkpoint)
+                backend = f"neural ({checkpoint.name})"
+                break
+            except (OSError, RuntimeError, ValueError, KeyError) as exc:
+                load_errors.append(f"{checkpoint.name}: {exc}")
+                if explicit_checkpoint:
+                    sink.close()
+                    typer.echo(f"Error loading neural checkpoint: {exc}", err=True)
+                    raise typer.Exit(1)
+
+    if detector is None and load_errors:
+        typer.echo(
+            "Warning: no bundled neural checkpoint could be loaded; "
+            "falling back to the spectral detector. " + " | ".join(load_errors),
+            err=True,
+        )
 
     resolved_device: int | str | None = input_device
     if input_device is not None:
