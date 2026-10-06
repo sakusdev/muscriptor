@@ -154,7 +154,9 @@ def load_urmp(root: str | Path) -> list[TimedPiece]:
         )
 
     if len(pieces) < 2:
-        raise ValueError(f"expected at least two URMP pieces under {root}, found {len(pieces)}")
+        raise ValueError(
+            f"expected at least two URMP pieces under {root}, found {len(pieces)}"
+        )
     return pieces
 
 
@@ -248,7 +250,9 @@ def _real_batch(
             noise_std = rng.uniform(0.0, 0.004)
             if noise_std:
                 noise = torch.from_numpy(
-                    np_rng.normal(0.0, noise_std, size=_WINDOW_SAMPLES).astype(np.float32)
+                    np_rng.normal(0.0, noise_std, size=_WINDOW_SAMPLES).astype(
+                        np.float32
+                    )
                 )
                 frame.add_(noise)
             if rng.random() < 0.5:
@@ -438,7 +442,9 @@ def finetune_multidataset(
         "max_midi": _MAX_MIDI,
         "source_checkpoint": str(base_checkpoint),
         "datasets": sorted(train_sets),
-        "train_piece_counts": {name: len(pieces) for name, pieces in train_sets.items()},
+        "train_piece_counts": {
+            name: len(pieces) for name, pieces in train_sets.items()
+        },
         "validation_piece_counts": {
             name: len(pieces) for name, pieces in validation_sets.items()
         },
