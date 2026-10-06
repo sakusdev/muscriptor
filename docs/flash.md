@@ -18,6 +18,8 @@ This first implementation is an MVP for the realtime pipeline:
 - system MIDI output through `mido` + `python-rtmidi`
 - latency instrumentation and budget-miss counting
 - panic-style All Notes Off when the session exits
+- Google Colab browser-microphone streaming UI
+- uploaded-audio Flash benchmark mode for Colab
 
 The spectral detector is intentionally lightweight and deterministic. It is
 not intended to match the normal MuScriptor transformer's transcription
@@ -64,6 +66,28 @@ For event/latency diagnostics:
 muscriptor-flash live --midi-port "loopMIDI Port" --verbose
 ```
 
+## Google Colab
+
+Open `notebooks/MuScriptor_Flash_Colab.ipynb`. The notebook installs the
+`work/muscriptor-flash` branch plus Gradio and launches a browser UI with two
+modes:
+
+- **Live microphone**: the browser records microphone audio and sends roughly
+  100 ms chunks to the Colab runtime. FlashEngine processes those chunks and
+  shows MIDI events, active notes, Flash DSP time, budget misses, and a rough
+  transport/queue-lag estimate. Stopping the recording exports a `.mid` file.
+- **Uploaded audio benchmark**: feeds an uploaded clip through the exact same
+  streaming engine in hop-sized blocks without browser/network timing noise.
+  This is useful for tuning confidence/polyphony and measuring engine speed.
+
+The Colab runtime is remote, so the native **250 ms target is not an end-to-end
+latency guarantee** there. Browser capture, network transport, Gradio queueing,
+and notebook scheduling are additional. The native CLI remains the path for a
+local DAW / virtual-MIDI workflow with predictable latency.
+
+The current Flash spectral MVP is CPU-friendly, so a GPU runtime is not
+required for the Colab notebook.
+
 ## Default latency geometry
 
 The default configuration is:
@@ -99,6 +123,25 @@ attack/release note state machine
     +----> MIDI NoteOn / NoteOff ----> RtMidi port
     |
     +----> latency / confidence stats
+```
+
+In Colab, the capture side is different but the engine is the same:
+
+```text
+Browser microphone
+    |
+    v
+Gradio stream (~100 ms chunks)
+    |
+    v
+Colab runtime
+    |
+    v
+FlashEngine
+    |
+    +----> live event/status display
+    |
+    +----> MIDI file on stop
 ```
 
 The normal MuScriptor model remains unchanged. A recording can therefore be
