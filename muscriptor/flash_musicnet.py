@@ -6,10 +6,10 @@ indices in the original 44.1 kHz recording. This adapter converts those
 intervals to the same 10 ms, 88-key frame representation used by the Flash
 multi-dataset trainer while keeping the original train/test split.
 
-MusicNet is large, so recordings are never loaded wholesale into RAM. Each
-``TimedPiece`` carries a lazy window loader that seeks only the source frames
-needed for the current causal 128 ms Flash window and resamples that slice to
-16 kHz on demand.
+MusicNet is large, so neither audio nor frame labels are expanded wholesale in
+RAM. Each ``TimedPiece`` carries a lazy audio-window loader, and labels are kept
+as merged per-pitch frame intervals that materialize one 88-key vector only when
+a training/evaluation frame is requested.
 """
 
 from __future__ import annotations
@@ -33,6 +33,55 @@ _MUSICNET_HOP_SECONDS = 0.010
 _MUSICNET_FRAME_ORIGIN_SECONDS = 0.010
 _MIN_MIDI = 21
 _MAX_MIDI = 108
+_NOTE_COUNT = _MAX_MIDI - _MIN_MIDI + 1
+
+
+class SparseMusicNetLabels:
+    """Memory-efficient random access to MusicNet's 10 ms 88-key labels."""
+
+    def __init__(
+        self,
+        frame_count: int,
+        intervals: dict[int, tuple[np.ndarray, np.ndarray]],
+    ) -> None:
+        if frame_count <= 0:
+            raise ValueError("frame_count must be positive")
+        self.frame_count = int(frame_count)
+        self.intervals = intervals
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        return self.frame_count, _NOTE_COUNT
+
+    def __len__(self) -> int:
+        return self.frame_count
+
+    def _frame(self, frame_index: int) -> torch.Tensor:
+        if frame_index < 0:
+            frame_index += self.frame_count
+        if not 0 <= frame_index < self.frame_count:
+            raise IndexError(frame_index)
+
+        vector = torch.zeros(_NOTE_COUNT, dtype=torch.float32)
+        for pitch_index, (starts, stops) in self.intervals.items():
+            position = int(np.searchsorted(starts, frame_index, side="right")) - 1
+            if position >= 0 and int(stops[position]) > frame_index:
+                vector[pitch_index] = 1.0
+        return vector
+
+    def __getitem__(self, index):
+        if isinstance(index, tuple):
+            if len(index) != 2:
+                raise IndexError(index)
+            frame_index, pitch_index = index
+            return self._frame(int(frame_index))[pitch_index]
+        if isinstance(index, slice):
+            indices = range(*index.indices(self.frame_count))
+            frames = [self._frame(frame_index) for frame_index in indices]
+            if not frames:
+                return torch.empty((0, _NOTE_COUNT), dtype=torch.float32)
+            return torch.stack(frames)
+        return self._frame(int(index))
 
 
 def _find_musicnet_split_dirs(root: str | Path, split: str) -> tuple[Path, Path]:
@@ -143,43 +192,99 @@ def _load_musicnet_window(path: str | Path, target_seconds: float) -> torch.Tens
     return target.contiguous()
 
 
-def _labels_from_musicnet_csv(
-    path: str | Path,
+def _frame_count(
     *,
-    audio_samples: int | None = None,
-    duration_seconds: float | None = None,
-) -> torch.Tensor:
-    """Rasterize MusicNet source-sample intervals to a 10 ms 88-key grid."""
+    audio_samples: int | None,
+    duration_seconds: float | None,
+) -> int:
     if duration_seconds is None:
         if audio_samples is None or audio_samples <= 0:
             raise ValueError("provide positive audio_samples or duration_seconds")
         duration_seconds = audio_samples / _SAMPLE_RATE
     if duration_seconds <= 0.0:
         raise ValueError("duration_seconds must be positive")
+    return max(1, math.ceil(duration_seconds / _MUSICNET_HOP_SECONDS))
 
-    frame_count = max(1, math.ceil(duration_seconds / _MUSICNET_HOP_SECONDS))
-    labels = np.zeros((frame_count, 88), dtype=np.float32)
 
+def _sample_interval_to_frames(
+    start_sample: int,
+    end_sample: int,
+    frame_count: int,
+) -> tuple[int, int] | None:
+    if end_sample <= start_sample:
+        return None
+    onset = start_sample / _MUSICNET_SOURCE_SAMPLE_RATE
+    offset = end_sample / _MUSICNET_SOURCE_SAMPLE_RATE
+    start = max(0, math.ceil(onset / _MUSICNET_HOP_SECONDS) - 1)
+    stop = max(0, math.ceil(offset / _MUSICNET_HOP_SECONDS) - 1)
+    start = min(start, frame_count)
+    stop = min(stop, frame_count)
+    if start >= stop:
+        return None
+    return start, stop
+
+
+def _merge_intervals(intervals: list[tuple[int, int]]) -> tuple[np.ndarray, np.ndarray]:
+    """Merge overlapping/touching frame intervals for one pitch."""
+    if not intervals:
+        empty = np.empty(0, dtype=np.int32)
+        return empty, empty
+
+    intervals.sort()
+    merged: list[list[int]] = []
+    for start, stop in intervals:
+        if not merged or start > merged[-1][1]:
+            merged.append([start, stop])
+        else:
+            merged[-1][1] = max(merged[-1][1], stop)
+    starts = np.asarray([interval[0] for interval in merged], dtype=np.int32)
+    stops = np.asarray([interval[1] for interval in merged], dtype=np.int32)
+    return starts, stops
+
+
+def _sparse_labels_from_musicnet_csv(
+    path: str | Path,
+    *,
+    audio_samples: int | None = None,
+    duration_seconds: float | None = None,
+) -> SparseMusicNetLabels:
+    frame_count = _frame_count(
+        audio_samples=audio_samples,
+        duration_seconds=duration_seconds,
+    )
+    grouped: dict[int, list[tuple[int, int]]] = {}
     for start_sample, end_sample, note in _read_musicnet_csv(path):
-        if end_sample <= start_sample or not _MIN_MIDI <= note <= _MAX_MIDI:
+        if not _MIN_MIDI <= note <= _MAX_MIDI:
             continue
-        onset = start_sample / _MUSICNET_SOURCE_SAMPLE_RATE
-        offset = end_sample / _MUSICNET_SOURCE_SAMPLE_RATE
+        interval = _sample_interval_to_frames(start_sample, end_sample, frame_count)
+        if interval is None:
+            continue
+        grouped.setdefault(note - _MIN_MIDI, []).append(interval)
 
-        # Label index i represents time (i + 1) * 10 ms. MusicNet intervals
-        # are half-open, so activate frames at/after onset and before offset.
-        start = max(0, math.ceil(onset / _MUSICNET_HOP_SECONDS) - 1)
-        stop = max(0, math.ceil(offset / _MUSICNET_HOP_SECONDS) - 1)
-        start = min(start, frame_count)
-        stop = min(stop, frame_count)
-        if start < stop:
-            labels[start:stop, note - _MIN_MIDI] = 1.0
+    merged = {
+        pitch_index: _merge_intervals(intervals)
+        for pitch_index, intervals in grouped.items()
+    }
+    return SparseMusicNetLabels(frame_count, merged)
 
-    return torch.from_numpy(labels)
+
+def _labels_from_musicnet_csv(
+    path: str | Path,
+    *,
+    audio_samples: int | None = None,
+    duration_seconds: float | None = None,
+) -> torch.Tensor:
+    """Materialize dense labels for tests/small utilities; training stays sparse."""
+    sparse = _sparse_labels_from_musicnet_csv(
+        path,
+        audio_samples=audio_samples,
+        duration_seconds=duration_seconds,
+    )
+    return sparse[:]
 
 
 def load_musicnet_split(root: str | Path, split: str) -> list[TimedPiece]:
-    """Load one official MusicNet split as lazily decoded Flash pieces."""
+    """Load one official MusicNet split with lazy audio and sparse labels."""
     data_dir, label_dir = _find_musicnet_split_dirs(root, split)
     pieces: list[TimedPiece] = []
 
@@ -188,7 +293,7 @@ def load_musicnet_split(root: str | Path, split: str) -> list[TimedPiece]:
         if not csv_path.is_file():
             continue
         duration_seconds, _ = _musicnet_audio_info(wav_path)
-        labels = _labels_from_musicnet_csv(
+        labels = _sparse_labels_from_musicnet_csv(
             csv_path,
             duration_seconds=duration_seconds,
         )
@@ -212,5 +317,5 @@ def load_musicnet_split(root: str | Path, split: str) -> list[TimedPiece]:
 
 
 def load_musicnet(root: str | Path) -> tuple[list[TimedPiece], list[TimedPiece]]:
-    """Load MusicNet's official train and test splits without eager audio decode."""
+    """Load MusicNet's official train and test splits without eager expansion."""
     return load_musicnet_split(root, "train"), load_musicnet_split(root, "test")
