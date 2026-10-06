@@ -61,7 +61,9 @@ class FlashNeuralNet(nn.Module):
                 f"expected {self.window_samples} samples, got {waveform.shape[1]}"
             )
         centered = waveform - waveform.mean(dim=1, keepdim=True)
-        spectrum = torch.fft.rfft(centered * self.analysis_window, n=self.window_samples).abs()
+        spectrum = torch.fft.rfft(
+            centered * self.analysis_window, n=self.window_samples
+        ).abs()
         spectrum = spectrum / spectrum.amax(dim=1, keepdim=True).clamp_min(1e-6)
         features = torch.log1p(20.0 * spectrum)
         return self.classifier(features)
@@ -79,7 +81,9 @@ class NeuralPitchDetector:
     ) -> None:
         self.config = config
         self.device = torch.device(device)
-        payload = torch.load(Path(checkpoint), map_location=self.device, weights_only=False)
+        payload = torch.load(
+            Path(checkpoint), map_location=self.device, weights_only=False
+        )
         metadata = payload.get("metadata", {})
 
         expected_sr = int(metadata.get("sample_rate", config.sample_rate))
@@ -254,7 +258,9 @@ def _metrics(
     return {"precision": precision, "recall": recall, "f1": f1}
 
 
-def _best_threshold(logits: torch.Tensor, targets: torch.Tensor) -> tuple[float, dict[str, float]]:
+def _best_threshold(
+    logits: torch.Tensor, targets: torch.Tensor
+) -> tuple[float, dict[str, float]]:
     best_threshold = 0.35
     best_metrics = {"precision": 0.0, "recall": 0.0, "f1": 0.0}
     for threshold in np.linspace(0.10, 0.85, 31):
@@ -282,7 +288,9 @@ def train_synthetic(
     torch.set_num_threads(max(1, min(4, torch.get_num_threads())))
 
     model = FlashNeuralNet(window_samples=window_samples)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=learning_rate, weight_decay=1e-4
+    )
     pos_weight = torch.full((88,), 28.0)
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
@@ -358,7 +366,9 @@ def _smoke(checkpoint: str | Path) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Train/test MuScripter Flash neural backend")
+    parser = argparse.ArgumentParser(
+        description="Train/test MuScripter Flash neural backend"
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     train = subparsers.add_parser("train", help="train the synthetic bootstrap model")
@@ -369,7 +379,9 @@ def main() -> None:
     train.add_argument("--learning-rate", type=float, default=1e-3)
     train.add_argument("--seed", type=int, default=20261006)
 
-    smoke = subparsers.add_parser("smoke", help="load a checkpoint and run silence inference")
+    smoke = subparsers.add_parser(
+        "smoke", help="load a checkpoint and run silence inference"
+    )
     smoke.add_argument("checkpoint")
 
     args = parser.parse_args()
