@@ -20,6 +20,8 @@ This first implementation is an MVP for the realtime pipeline:
 - panic-style All Notes Off when the session exits
 - Google Colab browser-microphone streaming UI
 - browser Web MIDI output from Colab to a local MIDI port
+- 32 ms Colab transport cadence
+- browser-side active-note tracking and automatic panic on disconnect/page close
 - uploaded-audio Flash benchmark mode for Colab
 
 The spectral detector is intentionally lightweight and deterministic. It is
@@ -75,11 +77,11 @@ modes.
 
 ### Live microphone + realtime local MIDI
 
-The browser records microphone audio and sends roughly 100 ms chunks to the
-Colab runtime. FlashEngine processes those chunks and returns NoteOn/NoteOff
-messages to the browser. The browser then forwards them through the Web MIDI
-API to a **local** MIDI output such as loopMIDI, a hardware MIDI interface, or
-a DAW-visible virtual MIDI port.
+The browser records microphone audio and sends chunks at roughly **32 ms**
+cadence to the Colab runtime. FlashEngine processes those chunks and returns
+NoteOn/NoteOff messages to the browser. The browser then forwards them through
+the Web MIDI API to a **local** MIDI output such as loopMIDI, a hardware MIDI
+interface, or a DAW-visible virtual MIDI port.
 
 Typical Windows path:
 
@@ -110,9 +112,14 @@ Before recording:
 4. Allow MIDI-device access in the browser prompt.
 5. Start microphone recording.
 
-The UI includes a **Panic / All Notes Off** button. Stopping microphone capture
-also flushes active Flash notes and sends their NoteOff messages to the local
-MIDI port before exporting the recorded `.mid` file.
+The browser bridge tracks active notes locally. The UI includes a **Panic / All
+Notes Off** button, and a panic is also sent automatically if the selected MIDI
+output disconnects or the page closes. Stopping microphone capture flushes any
+active Flash notes and sends their NoteOff messages before exporting the
+recorded `.mid` file.
+
+Idle audio chunks reuse the previous MIDI payload, so they do not trigger
+redundant Web MIDI sends.
 
 Web MIDI requires a supported browser, a secure context, and explicit user
 permission. Desktop Chrome/Edge is the recommended path. If Colab's inline
@@ -179,7 +186,7 @@ Colab realtime output:
 Browser microphone
     |
     v
-Gradio stream (~100 ms chunks)
+Gradio stream (~32 ms cadence)
     |
     v
 Colab runtime
