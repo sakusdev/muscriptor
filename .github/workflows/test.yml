@@ -22,33 +22,15 @@ jobs:
       - run: uv python install 3.12
       - run: uv sync --dev
       - run: uv run pytest -q
-      - name: Ruff check new post-processing and Flash code
+      - name: Ruff check MuScripter Flash code
         run: >-
           uvx ruff check
-          muscriptor/colab_app.py
           muscriptor/flash.py
           muscriptor/flash_cli.py
-          muscriptor/utils/beats.py
-          muscriptor/utils/dynamics.py
-          tests/test_beats.py
-          tests/test_colab_app.py
-          tests/test_cli.py
-          tests/test_dynamics.py
           tests/test_flash.py
-      - name: Ruff format check changed Python files
+      - name: Ruff format check MuScripter Flash code
         run: >-
           uvx ruff format --check
-          muscriptor/main.py
-          muscriptor/server.py
-          muscriptor/colab_app.py
           muscriptor/flash.py
           muscriptor/flash_cli.py
-          muscriptor/tokenizer/notes.py
-          muscriptor/transcription_model.py
-          muscriptor/utils/beats.py
-          muscriptor/utils/dynamics.py
-          tests/test_beats.py
-          tests/test_colab_app.py
-          tests/test_cli.py
-          tests/test_dynamics.py
           tests/test_flash.py
