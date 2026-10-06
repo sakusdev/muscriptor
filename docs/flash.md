@@ -6,12 +6,14 @@ five-second chunking used by the normal high-accuracy transformer.
 
 ## Status
 
-This first implementation is an MVP for the realtime pipeline:
+The realtime pipeline now includes:
 
 - microphone input through PortAudio / `sounddevice`
 - 128 ms rolling analysis window by default
 - 32 ms analysis hop
-- polyphonic spectral pitch estimation
+- **88-key neural multi-pitch detection** for the native CLI
+- real-recording fine-tuned and synthetic neural checkpoints
+- deterministic spectral fallback
 - immediate NoteOn with configurable attack frames
 - debounced NoteOff with configurable release frames
 - velocity estimation
@@ -24,10 +26,49 @@ This first implementation is an MVP for the realtime pipeline:
 - browser-side active-note tracking and automatic panic on disconnect/page close
 - uploaded-audio Flash benchmark mode for Colab
 
-The spectral detector is intentionally lightweight and deterministic. It is
-not intended to match the normal MuScriptor transformer's transcription
-quality. It establishes the streaming API, timing behavior, MIDI state
-management, and device path needed for a future causal neural Flash model.
+The native CLI prefers bundled backends in this order:
+
+1. `muscriptor/checkpoints/flash-neural-bach10.pt`
+2. `muscriptor/checkpoints/flash-neural-synthetic.pt`
+3. the spectral detector
+
+Both neural models consume only the current 128 ms audio window; they do not
+look into future audio. The spectral backend remains useful as a deterministic
+CPU-friendly fallback and for debugging.
+
+## Neural model training
+
+The first neural bootstrap is trained on procedurally generated tones and
+polyphonic mixtures with exact 88-key labels. It establishes broad pitch
+coverage without requiring an external training corpus.
+
+The real-recording checkpoint then fine-tunes that model on Bach10. The current
+split uses eight pieces for training and two pieces (`09-Jesus` and
+`10-NunBitten`) as a held-out evaluation set. Training mixes 75% Bach10 windows
+with 25% synthetic windows so the model does not completely discard the wider
+synthetic pitch prior.
+
+On the current held-out Bach10 split:
+
+| Checkpoint | Precision | Recall | F1 |
+| --- | ---: | ---: | ---: |
+| synthetic bootstrap | 0.497 | 0.620 | 0.552 |
+| Bach10 fine-tuned | **0.617** | **0.808** | **0.700** |
+
+This is a narrow frame-level validation on two Bach10 quartet recordings, not a
+production benchmark across arbitrary genres, instruments, microphones or
+mixes. Broader real-data training and evaluation are still needed.
+
+The real-data trainer is `muscriptor/flash_realdata.py`. The
+`train-flash-bach10` GitHub Actions workflow is manual (`workflow_dispatch`) so
+retraining does not consume Actions minutes on every source-code push. It:
+
+1. downloads Bach10,
+2. fine-tunes from the synthetic checkpoint,
+3. requires an improvement on the held-out pieces,
+4. smoke-tests the resulting checkpoint,
+5. uploads it as an Actions artifact, and
+6. commits the accepted checkpoint and metrics back to the training branch.
 
 ## Install
 
@@ -54,6 +95,15 @@ muscriptor-flash list-midi
 muscriptor-flash live --midi-port "loopMIDI Port"
 ```
 
+The best bundled neural checkpoint is selected automatically by the native
+CLI. A specific checkpoint can be forced with:
+
+```bash
+muscriptor-flash live \
+  --midi-port "loopMIDI Port" \
+  --neural-checkpoint path/to/flash-model.pt
+```
+
 The MIDI port can be an exact name or a unique substring. If the system has
 exactly one MIDI output, `--midi-port` may be omitted.
 
@@ -71,9 +121,9 @@ muscriptor-flash live --midi-port "loopMIDI Port" --verbose
 
 ## Google Colab
 
-Open `notebooks/MuScriptor_Flash_Colab.ipynb`. The notebook installs the
-`work/muscriptor-flash` branch plus Gradio and launches a browser UI with two
-modes.
+Open `notebooks/MuScriptor_Flash_Colab.ipynb`. The notebook installs the Flash
+frontend plus Gradio and launches a browser UI with live microphone and uploaded
+benchmark modes.
 
 ### Live microphone + realtime local MIDI
 
@@ -138,9 +188,6 @@ and notebook scheduling are additional. The realtime Web MIDI bridge removes
 the need for the Colab VM itself to see the user's local MIDI devices, but it
 does not remove the network round trip.
 
-The current Flash spectral MVP is CPU-friendly, so a GPU runtime is not
-required for the Colab notebook.
-
 ## Default latency geometry
 
 The default configuration is:
@@ -170,8 +217,9 @@ Audio device
 128 ms rolling ring buffer
     |
     v
-Flash pitch detector
-    |
+Flash neural detector
+    |       \
+    |        +-- spectral fallback
     v
 attack/release note state machine
     |
@@ -208,10 +256,10 @@ The normal MuScriptor model remains unchanged. A recording can therefore be
 processed later by the high-accuracy path to create a corrected final MIDI
 without forcing the realtime path to wait for future audio.
 
-## Next model step
+## Next model steps
 
-The intended second phase is to replace the MVP spectral detector with a
-causal neural backend that keeps the same `FlashEngine` streaming contract.
-That model should output per-pitch onset/frame probabilities incrementally so
-it can preserve the sub-250-ms behavior while improving instrument separation,
-polyphonic accuracy, and robustness on real mixes.
+The next quality gains should come from broader real recordings rather than
+more synthetic-only training. Good targets are datasets with aligned isolated
+instrument tracks and note annotations, followed by cross-dataset evaluation.
+The Flash API and latency contract do not need to change as those checkpoints
+improve.
