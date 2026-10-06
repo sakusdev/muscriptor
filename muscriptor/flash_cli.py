@@ -153,8 +153,7 @@ def live(
     typer.echo("MuScripter Flash")
     typer.echo(f"  MIDI: {sink.name}")
     typer.echo(
-        f"  analysis: {config.window_ms:.0f} ms window / "
-        f"{config.hop_ms:.0f} ms hop"
+        f"  analysis: {config.window_ms:.0f} ms window / {config.hop_ms:.0f} ms hop"
     )
     typer.echo(
         f"  nominal NoteOn latency: {config.nominal_note_on_latency_ms:.1f} ms "
