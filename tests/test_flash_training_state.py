@@ -4,6 +4,8 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from muscriptor import flash_multidataset
+from muscriptor.flash_multidataset import TimedPiece, finetune_multidataset
 from muscriptor.flash_neural import FlashNeuralNet
 from muscriptor.flash_training_state import load_training_state, save_training_state
 
@@ -132,3 +134,82 @@ def test_training_state_rejects_config_mismatch(tmp_path: Path):
         assert "configuration mismatch" in str(exc)
     else:
         raise AssertionError("expected training-state configuration mismatch")
+
+
+def test_multidataset_training_resumes_from_saved_step(tmp_path: Path, monkeypatch):
+    base = tmp_path / "base.pt"
+    model = FlashNeuralNet()
+    torch.save(
+        {
+            "model": model.state_dict(),
+            "metadata": {
+                "backend": "test-bootstrap",
+                "sample_rate": 16_000,
+                "window_samples": 2_048,
+                "min_midi": 21,
+                "max_midi": 108,
+            },
+        },
+        base,
+    )
+
+    labels = torch.zeros((6, 88), dtype=torch.float32)
+    labels[:, 69 - 21] = 1.0
+    audio = torch.zeros(8_000, dtype=torch.float32)
+    train_piece = TimedPiece(
+        "train-piece",
+        "Test",
+        audio,
+        labels,
+        frame_origin_seconds=0.128,
+        frame_hop_seconds=0.032,
+    )
+    validation_piece = TimedPiece(
+        "validation-piece",
+        "Test",
+        audio,
+        labels,
+        frame_origin_seconds=0.128,
+        frame_hop_seconds=0.032,
+    )
+
+    monkeypatch.setattr(
+        flash_multidataset,
+        "_split_datasets",
+        lambda **_: (
+            {"Test": [train_piece]},
+            {"Test": [validation_piece]},
+        ),
+    )
+
+    output = tmp_path / "model.pt"
+    state = tmp_path / "training-state.pt"
+    first = finetune_multidataset(
+        base,
+        output,
+        musicnet="fixture",
+        steps=2,
+        batch_size=2,
+        real_fraction=1.0,
+        eval_every=1,
+        state_output=state,
+        save_every=1,
+        seed=1234,
+    )
+    assert first["resumed_from_step"] == 0
+    assert torch.load(state, weights_only=False)["step"] == 2
+
+    resumed = finetune_multidataset(
+        base,
+        output,
+        musicnet="fixture",
+        steps=3,
+        batch_size=2,
+        real_fraction=1.0,
+        eval_every=1,
+        resume_state=state,
+        save_every=1,
+        seed=1234,
+    )
+    assert resumed["resumed_from_step"] == 2
+    assert torch.load(state, weights_only=False)["step"] == 3
