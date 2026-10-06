@@ -33,7 +33,9 @@ def test_training_state_roundtrip_restores_model_optimizer_and_rng(tmp_path: Pat
         "eval_every": 50,
     }
     state_path = tmp_path / "state.pt"
-    best_state = {key: value.detach().clone() for key, value in model.state_dict().items()}
+    best_state = {
+        key: value.detach().clone() for key, value in model.state_dict().items()
+    }
 
     save_training_state(
         state_path,

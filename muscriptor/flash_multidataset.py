@@ -25,6 +25,7 @@ from torch import nn
 
 from muscriptor.flash_neural import FlashNeuralNet, _best_threshold, synthetic_batch
 from muscriptor.flash_realdata import load_bach10
+from muscriptor.flash_training_state import load_training_state, save_training_state
 from muscriptor.utils.audio import load_audio
 
 _SAMPLE_RATE = 16_000
@@ -349,10 +350,15 @@ def finetune_multidataset(
     real_fraction: float = 0.80,
     eval_every: int = 50,
     seed: int = 20261007,
+    resume_state: str | Path | None = None,
+    state_output: str | Path | None = None,
+    save_every: int = 50,
 ) -> dict[str, Any]:
     """Fine-tune one Flash checkpoint across one or more real datasets."""
     if steps <= 0 or batch_size <= 0:
         raise ValueError("steps and batch_size must be positive")
+    if eval_every <= 0 or save_every <= 0:
+        raise ValueError("eval_every and save_every must be positive")
     if not 0.0 < real_fraction <= 1.0:
         raise ValueError("real_fraction must be in (0, 1]")
 
@@ -378,18 +384,6 @@ def finetune_multidataset(
 
     model = FlashNeuralNet(window_samples=_WINDOW_SAMPLES)
     model.load_state_dict(payload["model"])
-    baseline_threshold, baseline_metrics, baseline_per_dataset = _evaluate(
-        model, validation_sets
-    )
-    print(
-        "baseline holdout: "
-        f"f1={baseline_metrics['f1']:.4f} "
-        f"p={baseline_metrics['precision']:.4f} "
-        f"r={baseline_metrics['recall']:.4f} "
-        f"threshold={baseline_threshold:.3f}",
-        flush=True,
-    )
-
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=learning_rate, weight_decay=2e-4
     )
@@ -397,16 +391,78 @@ def finetune_multidataset(
     real_count = max(1, round(batch_size * real_fraction))
     synth_count = batch_size - real_count
 
-    best_f1 = baseline_metrics["f1"]
-    best_threshold = baseline_threshold
-    best_metrics = dict(baseline_metrics)
-    best_per_dataset = copy.deepcopy(baseline_per_dataset)
-    best_state = copy.deepcopy(model.state_dict())
-    best_step = 0
-    last_loss = 0.0
+    training_config: dict[str, Any] = {
+        "datasets": sorted(train_sets),
+        "train_piece_names": {
+            name: [piece.name for piece in pieces]
+            for name, pieces in sorted(train_sets.items())
+        },
+        "validation_piece_names": {
+            name: [piece.name for piece in pieces]
+            for name, pieces in sorted(validation_sets.items())
+        },
+        "base_backend": metadata.get("backend"),
+        "batch_size": batch_size,
+        "learning_rate": learning_rate,
+        "real_fraction": real_fraction,
+        "eval_every": eval_every,
+        "seed": seed,
+    }
+    effective_state_path = (
+        Path(state_output or resume_state) if (state_output or resume_state) else None
+    )
+
+    start_step = 0
+    if resume_state is not None:
+        saved = load_training_state(
+            resume_state,
+            model=model,
+            optimizer=optimizer,
+            rng=rng,
+            np_rng=np_rng,
+            expected_config=training_config,
+        )
+        start_step = int(saved["step"])
+        if start_step > steps:
+            raise ValueError(
+                f"resume state is already at step {start_step}, beyond requested {steps}"
+            )
+        baseline_threshold = float(saved["baseline_threshold"])
+        baseline_metrics = dict(saved["baseline_metrics"])
+        baseline_per_dataset = copy.deepcopy(saved["baseline_per_dataset"])
+        best_f1 = float(saved["best_f1"])
+        best_threshold = float(saved["best_threshold"])
+        best_metrics = dict(saved["best_metrics"])
+        best_per_dataset = copy.deepcopy(saved["best_per_dataset"])
+        best_state = copy.deepcopy(saved["best_state"])
+        best_step = int(saved["best_step"])
+        last_loss = float(saved["last_loss"])
+        print(
+            f"resumed Flash training at step {start_step}/{steps} from {resume_state}",
+            flush=True,
+        )
+    else:
+        baseline_threshold, baseline_metrics, baseline_per_dataset = _evaluate(
+            model, validation_sets
+        )
+        print(
+            "baseline holdout: "
+            f"f1={baseline_metrics['f1']:.4f} "
+            f"p={baseline_metrics['precision']:.4f} "
+            f"r={baseline_metrics['recall']:.4f} "
+            f"threshold={baseline_threshold:.3f}",
+            flush=True,
+        )
+        best_f1 = baseline_metrics["f1"]
+        best_threshold = baseline_threshold
+        best_metrics = dict(baseline_metrics)
+        best_per_dataset = copy.deepcopy(baseline_per_dataset)
+        best_state = copy.deepcopy(model.state_dict())
+        best_step = 0
+        last_loss = 0.0
 
     model.train()
-    for step in range(1, steps + 1):
+    for step in range(start_step + 1, steps + 1):
         real_audio, real_labels = _real_batch(
             train_sets,
             real_count,
@@ -452,6 +508,33 @@ def finetune_multidataset(
                 best_step = step
             model.train()
 
+        if effective_state_path is not None and (
+            step % save_every == 0 or step == steps
+        ):
+            save_training_state(
+                effective_state_path,
+                model=model,
+                optimizer=optimizer,
+                step=step,
+                best_state=best_state,
+                best_step=best_step,
+                best_f1=best_f1,
+                best_threshold=best_threshold,
+                best_metrics=best_metrics,
+                best_per_dataset=best_per_dataset,
+                baseline_threshold=baseline_threshold,
+                baseline_metrics=baseline_metrics,
+                baseline_per_dataset=baseline_per_dataset,
+                last_loss=last_loss,
+                rng=rng,
+                np_rng=np_rng,
+                config=training_config,
+            )
+            print(
+                f"saved resumable Flash state at step {step}: {effective_state_path}",
+                flush=True,
+            )
+
     model.load_state_dict(best_state)
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -473,6 +556,7 @@ def finetune_multidataset(
             name: len(pieces) for name, pieces in validation_sets.items()
         },
         "steps": steps,
+        "resumed_from_step": start_step,
         "best_step": best_step,
         "batch_size": batch_size,
         "real_fraction": real_fraction,
@@ -516,6 +600,9 @@ def main() -> None:
     parser.add_argument("--real-fraction", type=float, default=0.80)
     parser.add_argument("--eval-every", type=int, default=50)
     parser.add_argument("--seed", type=int, default=20261007)
+    parser.add_argument("--resume-state")
+    parser.add_argument("--state-output")
+    parser.add_argument("--save-every", type=int, default=50)
     args = parser.parse_args()
 
     finetune_multidataset(
@@ -531,6 +618,9 @@ def main() -> None:
         real_fraction=args.real_fraction,
         eval_every=args.eval_every,
         seed=args.seed,
+        resume_state=args.resume_state,
+        state_output=args.state_output,
+        save_every=args.save_every,
     )
 
 
