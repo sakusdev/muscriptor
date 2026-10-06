@@ -62,9 +62,18 @@ test_labels/
 `muscriptor.flash_musicnet` pairs WAV and CSV files by recording ID and preserves
 that official train/test split. MusicNet's CSV `start_time` and `end_time` are
 sample indices on the original 44.1 kHz recording, not seconds. The adapter
-converts those indices to seconds, rasterizes the MIDI `note` column onto the
-same 10 ms 88-key grid, and resamples audio to Flash's 16 kHz input rate.
+converts those indices to the same 10 ms 88-key target clock used by Flash.
 
+MusicNet is intentionally **lazy** in the Flash trainer:
+
+- WAV files are not decoded in full. Each requested training frame seeks only
+  the causal 128 ms source window ending at that frame, then resamples that
+  slice to 16 kHz.
+- labels are not expanded to a full `frames x 88` matrix. Per-pitch note
+  intervals are merged and stored sparsely; an 88-key vector is materialized
+  only for the requested frame.
+
+This keeps working memory from scaling with the entire decoded MusicNet corpus.
 The compressed MusicNet archive is about 11.1 GB and expands substantially, so
 normal CI never downloads it. Keep it in external/local storage and pass its
 extracted root with `--musicnet`.
