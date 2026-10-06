@@ -42,6 +42,10 @@ and accept the CC BY-NC 4.0 license.
 
 The weights are then automatically downloaded on first use and cached locally.
 
+> **MuScripter Flash is different:** the current Flash realtime spectral backend
+> does not use the Hugging Face transformer weights, so Hugging Face login is not
+> required for Flash itself.
+
 ## Google Colab
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/sakusdev/muscriptor/blob/work/expressive-midi/notebooks/MuScriptor_Colab.ipynb)
@@ -62,6 +66,170 @@ of ipywidgets because Colab file upload/download interactions are more reliable 
 way. Before the first run, accept the model license on Hugging Face and either add
 `HF_TOKEN` to Colab **Secrets**, paste a token into the Advanced section, or
 authenticate in the notebook environment another way.
+
+## MuScripter Flash — realtime audio to MIDI
+
+**MuScripter Flash** is the low-latency transcription path. It is designed for
+live microphone input and realtime MIDI output instead of waiting for the normal
+high-accuracy transformer to process a full recording.
+
+Current defaults:
+
+- 16 kHz mono processing
+- 128 ms rolling analysis window
+- 32 ms analysis hop
+- 250 ms NoteOn latency budget
+- immediate NoteOn path
+- debounced NoteOff path
+- polyphonic spectral pitch detection
+- dynamic MIDI velocity
+- All Notes Off / panic handling
+
+The current Flash detector is a lightweight realtime MVP. It establishes the
+streaming, timing, MIDI-state and device pipeline, but it is **not expected to
+match the normal MuScriptor transformer on difficult mixes or instrument
+separation**. The intended next step is a causal neural Flash backend using the
+same streaming API.
+
+### Local Flash setup
+
+Clone the repository and install the Flash device dependencies:
+
+```bash
+git clone https://github.com/sakusdev/muscriptor.git
+cd muscriptor
+uv sync --extra flash
+```
+
+List available audio inputs and MIDI outputs:
+
+```bash
+uv run muscriptor-flash list-audio
+uv run muscriptor-flash list-midi
+```
+
+Start realtime transcription to a MIDI output:
+
+```bash
+uv run muscriptor-flash live --midi-port "loopMIDI Port"
+```
+
+The MIDI port can be an exact name or a unique substring. If the machine has
+exactly one MIDI output, `--midi-port` can be omitted.
+
+For event and latency diagnostics:
+
+```bash
+uv run muscriptor-flash live --midi-port "loopMIDI Port" --verbose
+```
+
+On platforms where RtMidi supports virtual output ports, Flash can create one:
+
+```bash
+uv run muscriptor-flash live --virtual-midi
+```
+
+The local CLI is the recommended mode for the **lowest and most predictable
+latency**, because microphone capture, Flash processing and MIDI output all stay
+on the same machine.
+
+### Windows + loopMIDI + DAW
+
+A practical Windows setup is:
+
+```text
+Microphone
+   |
+   v
+MuScripter Flash
+   |
+   v
+loopMIDI
+   |
+   v
+FL Studio / Ableton Live / another DAW or software instrument
+```
+
+1. Install and start loopMIDI.
+2. Create a virtual port such as `MuScripter Flash`.
+3. Run:
+
+   ```bash
+   uv run muscriptor-flash live --midi-port "MuScripter Flash"
+   ```
+
+4. Select that loopMIDI port as a MIDI input in your DAW or software instrument.
+5. Play into the selected microphone.
+
+If a note ever remains stuck, stop Flash or use the DAW's panic / All Notes Off
+function. Flash also flushes active notes when the native session exits.
+
+### Flash on Google Colab with realtime local MIDI
+
+Open [`notebooks/MuScriptor_Flash_Colab.ipynb`](notebooks/MuScriptor_Flash_Colab.ipynb).
+The notebook installs the Flash frontend and launches a Gradio UI.
+
+The Colab realtime path is:
+
+```text
+Microphone
+   |
+   v
+Chrome / Edge
+   |
+   | browser audio stream (~32 ms cadence)
+   v
+Google Colab
+   |
+   v
+FlashEngine
+   |
+   | NoteOn / NoteOff
+   v
+Web MIDI API in the browser
+   |
+   v
+loopMIDI / hardware MIDI output
+   |
+   v
+DAW / synth
+```
+
+On Windows with loopMIDI:
+
+1. Start loopMIDI and create a port, for example `MuScripter Flash`.
+2. Open the Flash Colab notebook and run its cells.
+3. In the **Live microphone** tab, enter `MuScripter Flash` (or another unique
+   part of the MIDI output name).
+4. Press **Connect realtime MIDI**.
+5. Allow MIDI-device access when the browser asks.
+6. Start microphone recording in the Flash UI.
+7. Route the loopMIDI port into your DAW or software instrument.
+
+The browser forwards each detected NoteOn/NoteOff to the selected local MIDI
+output. The UI also provides:
+
+- live active-note and event display
+- Flash DSP latency and rough transport/queue-lag diagnostics
+- **Panic / All Notes Off**
+- active-note tracking in the browser
+- automatic panic on MIDI disconnect or page close
+- NoteOff flush when recording stops
+- `.mid` export of the captured Flash session
+- an uploaded-audio benchmark mode for testing the same FlashEngine without
+  browser/network timing noise
+
+Desktop **Chrome or Edge** is recommended because Web MIDI is not available in
+every browser. Web MIDI requires a secure context and explicit user permission.
+If the inline Colab frame blocks MIDI permission, open the Gradio UI in its own
+tab and connect MIDI there.
+
+Colab is remote, so its **250 ms target is not an end-to-end latency guarantee**.
+Browser capture, network transport, Gradio streaming and notebook scheduling are
+added on top of Flash processing. The transport cadence is approximately 32 ms,
+but actual round-trip latency depends on the network and Colab runtime.
+
+For more implementation details, see [`docs/flash.md`](docs/flash.md).
 
 ## Try it locally
 
