@@ -171,7 +171,9 @@ def _real_batch(
             noise_std = rng.uniform(0.0, 0.004)
             if noise_std:
                 noise = torch.from_numpy(
-                    np_rng.normal(0.0, noise_std, size=_WINDOW_SAMPLES).astype(np.float32)
+                    np_rng.normal(0.0, noise_std, size=_WINDOW_SAMPLES).astype(
+                        np.float32
+                    )
                 )
                 frame.add_(noise)
             if rng.random() < 0.5:
@@ -207,7 +209,9 @@ def _evaluate_real(
     with torch.inference_mode():
         for offset in range(0, len(examples), batch_size):
             chunk = examples[offset : offset + batch_size]
-            waveforms = torch.stack([_causal_window(piece, index) for piece, index in chunk])
+            waveforms = torch.stack(
+                [_causal_window(piece, index) for piece, index in chunk]
+            )
             targets = torch.stack([piece.labels[index] for piece, index in chunk])
             logits_batches.append(model(waveforms).cpu())
             target_batches.append(targets.cpu())
@@ -274,7 +278,9 @@ def finetune_bach10(
         flush=True,
     )
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=2e-4)
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=learning_rate, weight_decay=2e-4
+    )
     criterion = nn.BCEWithLogitsLoss(pos_weight=torch.full((88,), 20.0))
 
     real_count = max(1, round(batch_size * real_fraction))
@@ -375,10 +381,14 @@ def finetune_bach10(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Fine-tune MuScripter Flash on real audio")
+    parser = argparse.ArgumentParser(
+        description="Fine-tune MuScripter Flash on real audio"
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    finetune = subparsers.add_parser("finetune", help="fine-tune on Bach10 real recordings")
+    finetune = subparsers.add_parser(
+        "finetune", help="fine-tune on Bach10 real recordings"
+    )
     finetune.add_argument("--dataset", required=True)
     finetune.add_argument("--base", required=True)
     finetune.add_argument("--output", required=True)
