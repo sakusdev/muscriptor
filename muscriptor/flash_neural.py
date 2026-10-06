@@ -1,13 +1,12 @@
 """Tiny trainable neural backend for MuScripter Flash.
 
-This module deliberately targets the realtime Flash contract rather than the
-five-second autoregressive MuScriptor model. The first checkpoint is trained on
+This module targets the realtime Flash contract rather than the five-second
+autoregressive MuScriptor model. The bootstrap checkpoint is trained on
 synthetic polyphonic audio so GitHub Actions can produce a usable model without
 shipping a large external dataset into CI.
 
-The network consumes only the current rolling Flash window; it never needs
-future audio. That makes it suitable for the existing 128 ms window / 32 ms hop
-streaming path. Synthetic training is only a bootstrap: real recorded stems and
+Inference consumes only the current rolling Flash window; it never needs future
+audio. Synthetic training is a bootstrap only: real recorded stems and
 MIDI-aligned data should replace or fine-tune it for production quality.
 """
 
@@ -28,33 +27,44 @@ from muscriptor.flash import FlashConfig, PitchEstimate
 
 
 class FlashNeuralNet(nn.Module):
-    """Small causal-ish raw-audio Conv1D + GRU multi-pitch classifier.
+    """Low-latency spectral-front-end neural multi-pitch classifier.
 
-    The model predicts the active state of MIDI notes 21..108 from one rolling
-    audio window. Convolutions use no right-padding and the final prediction is
-    taken from the last recurrent state, so inference never requires samples
-    beyond the current Flash window.
+    A 128 ms rolling waveform is converted to a normalized log spectrum and a
+    small MLP predicts the active state of MIDI notes 21..108. The FFT is only
+    computed over samples that have already arrived, so the model preserves the
+    existing Flash streaming/latency contract while training much faster than
+    the first raw-audio recurrent bootstrap on CPU-only Actions runners.
     """
 
-    def __init__(self, note_count: int = 88) -> None:
+    def __init__(self, note_count: int = 88, window_samples: int = 2048) -> None:
         super().__init__()
-        self.encoder = nn.Sequential(
-            nn.Conv1d(1, 16, kernel_size=9, stride=4),
-            nn.GELU(),
-            nn.Conv1d(16, 32, kernel_size=7, stride=4),
-            nn.GELU(),
-            nn.Conv1d(32, 48, kernel_size=5, stride=2),
-            nn.GELU(),
+        self.window_samples = window_samples
+        self.register_buffer(
+            "analysis_window",
+            torch.hann_window(window_samples, periodic=False),
+            persistent=True,
         )
-        self.gru = nn.GRU(48, 64, batch_first=True)
-        self.head = nn.Linear(64, note_count)
+        bins = window_samples // 2 + 1
+        self.classifier = nn.Sequential(
+            nn.Linear(bins, 256),
+            nn.GELU(),
+            nn.Linear(256, 128),
+            nn.GELU(),
+            nn.Linear(128, note_count),
+        )
 
     def forward(self, waveform: torch.Tensor) -> torch.Tensor:
         if waveform.ndim != 2:
             raise ValueError(f"expected [batch, samples], got {tuple(waveform.shape)}")
-        features = self.encoder(waveform.unsqueeze(1)).transpose(1, 2)
-        _, hidden = self.gru(features)
-        return self.head(hidden[-1])
+        if waveform.shape[1] != self.window_samples:
+            raise ValueError(
+                f"expected {self.window_samples} samples, got {waveform.shape[1]}"
+            )
+        centered = waveform - waveform.mean(dim=1, keepdim=True)
+        spectrum = torch.fft.rfft(centered * self.analysis_window, n=self.window_samples).abs()
+        spectrum = spectrum / spectrum.amax(dim=1, keepdim=True).clamp_min(1e-6)
+        features = torch.log1p(20.0 * spectrum)
+        return self.classifier(features)
 
 
 class NeuralPitchDetector:
@@ -92,10 +102,14 @@ class NeuralPitchDetector:
                 f"{config.min_midi}..{config.max_midi}"
             )
 
-        self.model = FlashNeuralNet(max_midi - min_midi + 1).to(self.device)
+        self.model = FlashNeuralNet(
+            max_midi - min_midi + 1,
+            window_samples=expected_samples,
+        ).to(self.device)
         self.model.load_state_dict(payload["model"])
         self.model.eval()
         self.min_midi = min_midi
+        self.recommended_threshold = float(metadata.get("decision_threshold", 0.35))
 
     def detect(self, frame: np.ndarray) -> dict[int, PitchEstimate]:
         array = np.asarray(frame, dtype=np.float32).reshape(-1)
@@ -114,8 +128,15 @@ class NeuralPitchDetector:
             probabilities = torch.sigmoid(self.model(tensor))[0].cpu().numpy()
 
         max_probability = float(np.max(probabilities))
+        # The spectral MVP's default 0.46 confidence has different calibration
+        # from the neural logits. Use the trained threshold unless the caller
+        # deliberately changed the Flash confidence setting.
+        if abs(self.config.min_confidence - 0.46) < 1e-9:
+            absolute_floor = self.recommended_threshold
+        else:
+            absolute_floor = self.config.min_confidence
         threshold = max(
-            self.config.min_confidence,
+            absolute_floor,
             max_probability * self.config.relative_threshold,
         )
         indices = np.flatnonzero(probabilities >= threshold)
@@ -163,7 +184,12 @@ def _synth_one(
             amplitude = rng.uniform(0.20, 0.55) * norm
             phase = rng.uniform(0.0, math.tau)
             partial = np.zeros(samples, dtype=np.float32)
-            for harmonic, harmonic_gain in ((1, 1.0), (2, 0.28), (3, 0.12)):
+            for harmonic, harmonic_gain in (
+                (1, 1.0),
+                (2, rng.uniform(0.12, 0.34)),
+                (3, rng.uniform(0.04, 0.16)),
+                (4, rng.uniform(0.0, 0.08)),
+            ):
                 harmonic_freq = freq * harmonic
                 if harmonic_freq >= sample_rate / 2:
                     continue
@@ -177,11 +203,11 @@ def _synth_one(
                 0.0, 1.0, attack_samples, dtype=np.float32
             )
             envelope *= np.linspace(
-                1.0, rng.uniform(0.65, 1.0), samples, dtype=np.float32
+                1.0, rng.uniform(0.60, 1.0), samples, dtype=np.float32
             )
             audio += amplitude * partial * envelope
 
-    noise_sigma = rng.uniform(0.002, 0.02)
+    noise_sigma = rng.uniform(0.001, 0.015)
     audio += np.random.normal(0.0, noise_sigma, size=samples).astype(np.float32)
     audio *= rng.uniform(0.55, 1.0)
     peak = max(float(np.max(np.abs(audio))), 1.0)
@@ -215,7 +241,7 @@ def synthetic_batch(
 def _metrics(
     logits: torch.Tensor,
     targets: torch.Tensor,
-    threshold: float = 0.45,
+    threshold: float,
 ) -> dict[str, float]:
     predictions = torch.sigmoid(logits) >= threshold
     truth = targets >= 0.5
@@ -228,13 +254,24 @@ def _metrics(
     return {"precision": precision, "recall": recall, "f1": f1}
 
 
+def _best_threshold(logits: torch.Tensor, targets: torch.Tensor) -> tuple[float, dict[str, float]]:
+    best_threshold = 0.35
+    best_metrics = {"precision": 0.0, "recall": 0.0, "f1": 0.0}
+    for threshold in np.linspace(0.10, 0.85, 31):
+        current = _metrics(logits, targets, float(threshold))
+        if current["f1"] > best_metrics["f1"]:
+            best_threshold = float(threshold)
+            best_metrics = current
+    return best_threshold, best_metrics
+
+
 def train_synthetic(
     output: str | Path,
     *,
     metrics_path: str | Path | None = None,
-    steps: int = 300,
+    steps: int = 500,
     batch_size: int = 32,
-    learning_rate: float = 2e-3,
+    learning_rate: float = 1e-3,
     seed: int = 20261006,
     sample_rate: int = 16_000,
     window_samples: int = 2048,
@@ -244,9 +281,9 @@ def train_synthetic(
     rng = random.Random(seed)
     torch.set_num_threads(max(1, min(4, torch.get_num_threads())))
 
-    model = FlashNeuralNet()
+    model = FlashNeuralNet(window_samples=window_samples)
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4)
-    pos_weight = torch.full((88,), 12.0)
+    pos_weight = torch.full((88,), 28.0)
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
 
     model.train()
@@ -271,7 +308,7 @@ def train_synthetic(
     model.eval()
     validation_rng = random.Random(seed + 1)
     val_audio, val_labels = synthetic_batch(
-        256,
+        512,
         sample_rate=sample_rate,
         window_samples=window_samples,
         rng=validation_rng,
@@ -279,13 +316,13 @@ def train_synthetic(
     with torch.inference_mode():
         val_logits = model(val_audio)
         val_loss = float(criterion(val_logits, val_labels).item())
-    metric_values = _metrics(val_logits, val_labels)
+    decision_threshold, metric_values = _best_threshold(val_logits, val_labels)
 
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
     metadata: dict[str, Any] = {
-        "format": 1,
-        "backend": "conv1d-gru-synthetic-bootstrap",
+        "format": 2,
+        "backend": "log-spectrum-mlp-synthetic-bootstrap",
         "sample_rate": sample_rate,
         "window_samples": window_samples,
         "window_ms": window_samples * 1000.0 / sample_rate,
@@ -296,6 +333,7 @@ def train_synthetic(
         "seed": seed,
         "train_loss": last_loss,
         "validation_loss": val_loss,
+        "decision_threshold": decision_threshold,
         **metric_values,
     }
     torch.save({"model": model.state_dict(), "metadata": metadata}, output)
@@ -326,9 +364,9 @@ def main() -> None:
     train = subparsers.add_parser("train", help="train the synthetic bootstrap model")
     train.add_argument("--output", required=True)
     train.add_argument("--metrics")
-    train.add_argument("--steps", type=int, default=300)
+    train.add_argument("--steps", type=int, default=500)
     train.add_argument("--batch-size", type=int, default=32)
-    train.add_argument("--learning-rate", type=float, default=2e-3)
+    train.add_argument("--learning-rate", type=float, default=1e-3)
     train.add_argument("--seed", type=int, default=20261006)
 
     smoke = subparsers.add_parser("smoke", help="load a checkpoint and run silence inference")
