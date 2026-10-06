@@ -3,7 +3,9 @@ import wave
 from pathlib import Path
 
 import numpy as np
+import torch
 
+from muscriptor.flash_multidataset import _causal_window
 from muscriptor.flash_musicnet import (
     _find_musicnet_split_dirs,
     _labels_from_musicnet_csv,
@@ -104,7 +106,7 @@ def test_find_musicnet_split_dirs_accepts_nested_archive_root(tmp_path: Path):
     assert label_dir == nested / "train_labels"
 
 
-def test_load_musicnet_preserves_official_train_test_split(tmp_path: Path):
+def test_load_musicnet_preserves_split_and_decodes_windows_lazily(tmp_path: Path):
     _write_split(tmp_path, "train", "1727", 69)
     _write_split(tmp_path, "test", "2303", 72)
 
@@ -114,7 +116,12 @@ def test_load_musicnet_preserves_official_train_test_split(tmp_path: Path):
     assert [piece.name for piece in test] == ["2303"]
     assert train[0].dataset == "MusicNet"
     assert test[0].dataset == "MusicNet"
-    assert train[0].audio.shape[0] == 1280  # 80 ms resampled to 16 kHz
+    assert train[0].audio is None
+    assert train[0].window_loader is not None
     assert train[0].labels.shape == (8, 88)
     assert train[0].labels[0, 69 - 21] == 1
     assert test[0].labels[0, 72 - 21] == 1
+
+    window = _causal_window(train[0], 4)
+    assert window.shape == (2048,)
+    assert torch.count_nonzero(window).item() == 0
