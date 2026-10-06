@@ -14,7 +14,6 @@ be exercised before a dedicated causal neural Flash model is trained.
 
 from __future__ import annotations
 
-import math
 import queue
 import time
 from dataclasses import dataclass, field
@@ -126,7 +125,9 @@ class SpectralPitchDetector:
         self._notes = np.arange(
             config.min_midi, config.max_midi + 1, dtype=np.int16
         )
-        freqs = 440.0 * np.power(2.0, (self._notes.astype(np.float64) - 69.0) / 12.0)
+        freqs = 440.0 * np.power(
+            2.0, (self._notes.astype(np.float64) - 69.0) / 12.0
+        )
 
         harmonic_bins = np.full((len(self._notes), 4), -1, dtype=np.int32)
         for i, fundamental in enumerate(freqs):
@@ -205,7 +206,9 @@ class SpectralPitchDetector:
         if indices.size == 0:
             return {}
 
-        ranked = indices[np.argsort(scores[indices])[::-1]][: self.config.max_polyphony]
+        ranked = indices[np.argsort(scores[indices])[::-1]][
+            : self.config.max_polyphony
+        ]
         estimates: dict[int, PitchEstimate] = {}
         for index in ranked:
             score = float(scores[index])
@@ -275,9 +278,11 @@ class FlashEngine:
     def _velocity(self, estimate: PitchEstimate) -> int:
         # Strength is intentionally mixed in so the loudest note is not always
         # velocity 127 merely because confidence is frame-relative.
-        normalized = min(1.0, 0.55 * estimate.confidence + 0.45 * estimate.strength)
+        normalized = min(
+            1.0, 0.55 * estimate.confidence + 0.45 * estimate.strength
+        )
         span = self.config.velocity_ceiling - self.config.velocity_floor
-        return int(round(self.config.velocity_floor + normalized * span))
+        return round(self.config.velocity_floor + normalized * span)
 
     def _advance_state(
         self,
@@ -473,7 +478,9 @@ class MidoMidiSink:
                 "note_on", note=event.note, velocity=event.velocity, channel=0
             )
         else:
-            message = mido.Message("note_off", note=event.note, velocity=0, channel=0)
+            message = mido.Message(
+                "note_off", note=event.note, velocity=0, channel=0
+            )
         self._port.send(message)
 
     def close(self) -> None:
@@ -506,7 +513,7 @@ class LiveFlashSession:
 
         hop = self.engine.config.hop_samples
 
-        def callback(indata, frames, time_info, status):  # noqa: ARG001
+        def callback(indata, frames, time_info, status):
             block = np.asarray(indata[:, 0], dtype=np.float32).copy()
             try:
                 self._queue.put_nowait(block)
