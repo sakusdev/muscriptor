@@ -19,6 +19,7 @@ This first implementation is an MVP for the realtime pipeline:
 - latency instrumentation and budget-miss counting
 - panic-style All Notes Off when the session exits
 - Google Colab browser-microphone streaming UI
+- browser Web MIDI output from Colab to a local MIDI port
 - uploaded-audio Flash benchmark mode for Colab
 
 The spectral detector is intentionally lightweight and deterministic. It is
@@ -70,20 +71,65 @@ muscriptor-flash live --midi-port "loopMIDI Port" --verbose
 
 Open `notebooks/MuScriptor_Flash_Colab.ipynb`. The notebook installs the
 `work/muscriptor-flash` branch plus Gradio and launches a browser UI with two
-modes:
+modes.
 
-- **Live microphone**: the browser records microphone audio and sends roughly
-  100 ms chunks to the Colab runtime. FlashEngine processes those chunks and
-  shows MIDI events, active notes, Flash DSP time, budget misses, and a rough
-  transport/queue-lag estimate. Stopping the recording exports a `.mid` file.
-- **Uploaded audio benchmark**: feeds an uploaded clip through the exact same
-  streaming engine in hop-sized blocks without browser/network timing noise.
-  This is useful for tuning confidence/polyphony and measuring engine speed.
+### Live microphone + realtime local MIDI
+
+The browser records microphone audio and sends roughly 100 ms chunks to the
+Colab runtime. FlashEngine processes those chunks and returns NoteOn/NoteOff
+messages to the browser. The browser then forwards them through the Web MIDI
+API to a **local** MIDI output such as loopMIDI, a hardware MIDI interface, or
+a DAW-visible virtual MIDI port.
+
+Typical Windows path:
+
+```text
+Microphone
+   |
+   v
+Chrome / Edge
+   |
+   v
+Colab / FlashEngine
+   |
+   v
+Web MIDI bridge in browser
+   |
+   v
+loopMIDI
+   |
+   v
+DAW / software instrument
+```
+
+Before recording:
+
+1. Start loopMIDI (or connect a hardware MIDI output).
+2. Enter a unique part of the output name, for example `loopMIDI`.
+3. Press **Connect realtime MIDI**.
+4. Allow MIDI-device access in the browser prompt.
+5. Start microphone recording.
+
+The UI includes a **Panic / All Notes Off** button. Stopping microphone capture
+also flushes active Flash notes and sends their NoteOff messages to the local
+MIDI port before exporting the recorded `.mid` file.
+
+Web MIDI requires a supported browser, a secure context, and explicit user
+permission. Desktop Chrome/Edge is the recommended path. If Colab's inline
+frame blocks MIDI permission, open the Gradio frame in its own tab and connect
+MIDI there.
+
+### Uploaded audio benchmark
+
+This feeds an uploaded clip through the exact same streaming engine in hop-sized
+blocks without browser/network timing noise. It is useful for tuning confidence
+and polyphony and measuring engine speed.
 
 The Colab runtime is remote, so the native **250 ms target is not an end-to-end
 latency guarantee** there. Browser capture, network transport, Gradio queueing,
-and notebook scheduling are additional. The native CLI remains the path for a
-local DAW / virtual-MIDI workflow with predictable latency.
+and notebook scheduling are additional. The realtime Web MIDI bridge removes
+the need for the Colab VM itself to see the user's local MIDI devices, but it
+does not remove the network round trip.
 
 The current Flash spectral MVP is CPU-friendly, so a GPU runtime is not
 required for the Colab notebook.
@@ -105,6 +151,8 @@ the configured budget.
 
 ## Architecture
 
+Native:
+
 ```text
 Audio device
     |
@@ -125,7 +173,7 @@ attack/release note state machine
     +----> latency / confidence stats
 ```
 
-In Colab, the capture side is different but the engine is the same:
+Colab realtime output:
 
 ```text
 Browser microphone
@@ -139,9 +187,14 @@ Colab runtime
     v
 FlashEngine
     |
-    +----> live event/status display
+    v
+NoteOn / NoteOff JSON
     |
-    +----> MIDI file on stop
+    v
+Browser Web MIDI API
+    |
+    v
+Local MIDI output (loopMIDI / hardware / DAW)
 ```
 
 The normal MuScriptor model remains unchanged. A recording can therefore be
