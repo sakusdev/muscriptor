@@ -92,4 +92,9 @@ jobs:
             exit 0
           fi
           git commit -m "Fine-tune Flash neural model on Bach10 [skip ci]"
+          # Development commits may land while training is running. Rebase the
+          # generated checkpoint commit onto the latest branch tip instead of
+          # failing with a non-fast-forward push.
+          git fetch origin work/flash-realdata
+          git rebase origin/work/flash-realdata
           git push origin HEAD:work/flash-realdata
