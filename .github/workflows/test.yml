@@ -1,0 +1,40 @@
+name: tests
+
+on:
+  push:
+    branches:
+      - main
+      - "work/**"
+  pull_request:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv python install 3.12
+      - run: uv sync --dev
+      - run: uv run pytest -q
+      - name: Ruff check MuScripter Flash code
+        run: >-
+          uvx ruff check
+          muscriptor/flash.py
+          muscriptor/flash_cli.py
+          muscriptor/flash_colab.py
+          tests/test_flash.py
+          tests/test_flash_colab.py
+      - name: Ruff format check MuScripter Flash code
+        run: >-
+          uvx ruff format --check
+          muscriptor/flash.py
+          muscriptor/flash_cli.py
+          muscriptor/flash_colab.py
+          tests/test_flash.py
+          tests/test_flash_colab.py

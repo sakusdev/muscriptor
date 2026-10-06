@@ -11,8 +11,16 @@ import torch
 
 logger = logging.getLogger(__name__)
 
-# Used to detect songs that don't have a constant tempo (don't use a metronome)
+# Used to detect songs that don't have a constant tempo (don't use a metronome).
+# Strict mode keeps the original 5% gate. Best-effort mode may still keep an
+# average BPM for moderately drifting live performances, but deliberately drops
+# meter/subdivision information so nothing gets quantized to a bad fixed grid.
 MAX_TEMPO_RESIDUAL = 0.05
+# Best-effort uses a duration-independent local consistency check: median
+# absolute deviation of inter-beat intervals divided by the median interval.
+# Smooth live tempo drift stays small; missing/doubled/spurious beats do not.
+MAX_BEST_EFFORT_IBI_MAD = 0.12
+MAX_BEST_EFFORT_OUTLIER_FRACTION = 0.10
 
 # Fraction of bars that must agree on a beats-per-bar count to write a time
 # signature. Trackers that lose the meter spread their downbeats across several
@@ -56,7 +64,8 @@ class BeatDetectionError(RuntimeError):
 
 # What to do when the tempo can't be detected: True raises, False doesn't even
 # try (the escape hatch for songs the detector gets wrong), and "best-effort"
-# warns and falls back to the placeholder tempo.
+# keeps a conservative average BPM for moderate live-tempo drift before falling
+# all the way back to the placeholder tempo.
 TempoDetection = bool | Literal["best-effort"]
 
 
@@ -304,8 +313,97 @@ def infer_beats_per_bar(
     return int(values[best])
 
 
+def grid_from_beats(
+    beats: np.ndarray,
+    downbeats: np.ndarray,
+    allow_tempo_drift: bool = False,
+) -> BeatGrid:
+    """Build a BeatGrid from tracker output.
+
+    Strict mode rejects recordings whose tracked beats do not fit one constant
+    tempo. In best-effort mode, moderate drift keeps only the least-squares
+    average BPM. Meter, tracked beats and subdivision alignment are intentionally
+    discarded in that case: an approximate DAW tempo is useful, but snapping a
+    live performance to a false fixed grid is not.
+    """
+
+    beats = np.asarray(beats, dtype=float)
+    downbeats = np.asarray(downbeats, dtype=float)
+    if len(beats) < MIN_BEATS:
+        raise BeatDetectionError(
+            f"Only {len(beats)} beats detected, need at least {MIN_BEATS}"
+        )
+
+    bpm, residual = fit_tempo(beats)
+    beat_seconds = 60.0 / bpm
+    residual_ratio = residual / beat_seconds
+
+    if residual_ratio > MAX_TEMPO_RESIDUAL:
+        if not allow_tempo_drift:
+            raise BeatDetectionError(
+                f"The recording has no fixed tempo (beats deviate "
+                f"{residual * 1000:.0f} ms RMS from a constant {bpm:.1f} BPM)"
+            )
+
+        intervals = np.diff(beats)
+        median_interval = float(np.median(intervals))
+        if median_interval <= 0:
+            raise BeatDetectionError("Beat tracker returned non-increasing beat times")
+        ibi_mad = (
+            float(np.median(np.abs(intervals - median_interval))) / median_interval
+        )
+        outliers = (intervals < 0.5 * median_interval) | (
+            intervals > 1.5 * median_interval
+        )
+        outlier_fraction = float(np.mean(outliers))
+        if (
+            ibi_mad > MAX_BEST_EFFORT_IBI_MAD
+            or outlier_fraction > MAX_BEST_EFFORT_OUTLIER_FRACTION
+        ):
+            raise BeatDetectionError(
+                "Beat tracking is too unstable even for best-effort tempo "
+                f"(IBI MAD {ibi_mad * 100:.1f}%, outliers "
+                f"{outlier_fraction * 100:.1f}%)"
+            )
+
+        logger.warning(
+            "tempo drifts too much for a fixed beat grid (%.1f%% global beat RMS), "
+            "but local beat intervals are coherent (MAD %.1f%%); keeping average "
+            "%.3f BPM only",
+            residual_ratio * 100,
+            ibi_mad * 100,
+            bpm,
+        )
+        return BeatGrid(
+            bpm=bpm,
+            beats_per_bar=None,
+            first_downbeat=0.0,
+            beats=None,
+        )
+
+    beats_per_bar = infer_beats_per_bar(beats, downbeats)
+    first_downbeat = float(downbeats[0]) if len(downbeats) else float(beats[0])
+    logger.info(
+        "detected %.3f BPM, %s, first downbeat %.3fs (beat residual %.1f ms)",
+        bpm,
+        f"{beats_per_bar}/4" if beats_per_bar else "meter unknown",
+        first_downbeat,
+        residual * 1000,
+    )
+    return BeatGrid(
+        bpm=bpm,
+        beats_per_bar=beats_per_bar,
+        first_downbeat=first_downbeat,
+        beats=beats,
+    )
+
+
 def detect_grid(
-    wav: torch.Tensor, sr: int, checkpoint: str = "final0", device: str = "cpu"
+    wav: torch.Tensor,
+    sr: int,
+    checkpoint: str = "final0",
+    device: str = "cpu",
+    allow_tempo_drift: bool = False,
 ) -> BeatGrid:
     """Detect a constant-tempo beat grid.
 
@@ -316,6 +414,8 @@ def detect_grid(
             model emits spurious beats before the first downbeat, which shifts
             the bar offset by a beat or two.
         device: Torch device for the beat model.
+        allow_tempo_drift: Keep only an average BPM when the performance has
+            moderate tempo drift. Meter and quantization grid are withheld.
 
     Raises BeatDetectionError when the audio is too short or the beats do not
     fit a constant tempo. An unclear meter is not fatal: the BeatGrid comes back
@@ -339,33 +439,8 @@ def detect_grid(
         checkpoint_path=checkpoint, device=device, dbn=False
     )(signal, sr)
 
-    beats = np.asarray(beats, dtype=float)
-    downbeats = np.asarray(downbeats, dtype=float)
-    if len(beats) < MIN_BEATS:
-        raise BeatDetectionError(
-            f"Only {len(beats)} beats detected, need at least {MIN_BEATS}"
-        )
-
-    bpm, residual = fit_tempo(beats)
-    beat_seconds = 60.0 / bpm
-    if residual > MAX_TEMPO_RESIDUAL * beat_seconds:
-        raise BeatDetectionError(
-            f"The recording has no fixed tempo (beats deviate {residual * 1000:.0f} ms "
-            f"RMS from a constant {bpm:.1f} BPM)"
-        )
-
-    beats_per_bar = infer_beats_per_bar(beats, downbeats)
-    first_downbeat = float(downbeats[0]) if len(downbeats) else float(beats[0])
-    logger.info(
-        "detected %.3f BPM, %s, first downbeat %.3fs (beat residual %.1f ms)",
-        bpm,
-        f"{beats_per_bar}/4" if beats_per_bar else "meter unknown",
-        first_downbeat,
-        residual * 1000,
-    )
-    return BeatGrid(
-        bpm=bpm,
-        beats_per_bar=beats_per_bar,
-        first_downbeat=first_downbeat,
-        beats=beats,
+    return grid_from_beats(
+        np.asarray(beats, dtype=float),
+        np.asarray(downbeats, dtype=float),
+        allow_tempo_drift=allow_tempo_drift,
     )
