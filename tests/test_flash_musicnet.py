@@ -81,6 +81,19 @@ def test_musicnet_rasterization_uses_44100hz_sample_clock(tmp_path: Path):
     assert frames[2, 69 - 21] == 0
 
 
+def test_musicnet_subframe_note_does_not_invent_future_activity(tmp_path: Path):
+    labels = tmp_path / "1727.csv"
+    with labels.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["start_time", "end_time", "note"])
+        writer.writeheader()
+        writer.writerow({"start_time": 44, "end_time": 220, "note": 69})
+
+    frames = _labels_from_musicnet_csv(labels, audio_samples=1600)
+
+    # Roughly [1, 5) ms contains no 10 ms target frame, so no false label.
+    assert frames[:, 69 - 21].sum().item() == 0
+
+
 def test_find_musicnet_split_dirs_accepts_nested_archive_root(tmp_path: Path):
     nested = tmp_path / "musicnet"
     _write_split(nested, "train", "1727", 69)
