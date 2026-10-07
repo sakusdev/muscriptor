@@ -26,6 +26,8 @@ jobs:
         run: uv run muscriptor-flash-train --help
       - name: Validate Flash promotion CLI
         run: uv run muscriptor-flash-promote --help
+      - name: Validate Flash comparison CLI
+        run: uv run muscriptor-flash-compare --help
       - name: Validate Flash training Colab notebook
         run: python -m json.tool notebooks/MuScriptor_Flash_Training_Colab.ipynb > /dev/null
       - name: Ruff check MuScripter Flash code
@@ -41,6 +43,7 @@ jobs:
           muscriptor/flash_training_state.py
           muscriptor/flash_train.py
           muscriptor/flash_promote.py
+          muscriptor/flash_compare.py
           tests/test_flash.py
           tests/test_flash_colab.py
           tests/test_flash_neural.py
@@ -50,6 +53,7 @@ jobs:
           tests/test_flash_training_state.py
           tests/test_flash_train.py
           tests/test_flash_promote.py
+          tests/test_flash_compare.py
       - name: Ruff format check MuScripter Flash code
         run: >-
           uvx ruff format --check
@@ -63,6 +67,7 @@ jobs:
           muscriptor/flash_training_state.py
           muscriptor/flash_train.py
           muscriptor/flash_promote.py
+          muscriptor/flash_compare.py
           tests/test_flash.py
           tests/test_flash_colab.py
           tests/test_flash_neural.py
@@ -72,3 +77,4 @@ jobs:
           tests/test_flash_training_state.py
           tests/test_flash_train.py
           tests/test_flash_promote.py
+          tests/test_flash_compare.py
