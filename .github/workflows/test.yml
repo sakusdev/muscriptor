@@ -22,6 +22,10 @@ jobs:
       - run: uv python install 3.12
       - run: uv sync --dev
       - run: uv run pytest -q
+      - name: Validate Flash training CLI
+        run: uv run muscriptor-flash-train --help
+      - name: Validate Flash training Colab notebook
+        run: python -m json.tool notebooks/MuScriptor_Flash_Training_Colab.ipynb > /dev/null
       - name: Ruff check MuScripter Flash code
         run: >-
           uvx ruff check
