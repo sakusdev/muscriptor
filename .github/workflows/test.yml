@@ -42,6 +42,7 @@ jobs:
           muscriptor/flash_realdata.py
           muscriptor/flash_multidataset.py
           muscriptor/flash_musicnet.py
+          muscriptor/flash_dataset_fetch.py
           muscriptor/flash_training_state.py
           muscriptor/flash_train.py
           muscriptor/flash_promote.py
@@ -53,6 +54,7 @@ jobs:
           tests/test_flash_realdata.py
           tests/test_flash_multidataset.py
           tests/test_flash_musicnet.py
+          tests/test_flash_dataset_fetch.py
           tests/test_flash_training_state.py
           tests/test_flash_train.py
           tests/test_flash_promote.py
@@ -68,6 +70,7 @@ jobs:
           muscriptor/flash_realdata.py
           muscriptor/flash_multidataset.py
           muscriptor/flash_musicnet.py
+          muscriptor/flash_dataset_fetch.py
           muscriptor/flash_training_state.py
           muscriptor/flash_train.py
           muscriptor/flash_promote.py
@@ -79,6 +82,7 @@ jobs:
           tests/test_flash_realdata.py
           tests/test_flash_multidataset.py
           tests/test_flash_musicnet.py
+          tests/test_flash_dataset_fetch.py
           tests/test_flash_training_state.py
           tests/test_flash_train.py
           tests/test_flash_promote.py
