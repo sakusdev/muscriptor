@@ -24,9 +24,11 @@ app = typer.Typer(
 
 def _bundled_neural_checkpoints() -> list[Path]:
     directory = Path(__file__).with_name("checkpoints")
-    # Prefer a checkpoint fine-tuned on real recordings.  The synthetic model
-    # remains a useful fallback when a real-data checkpoint is not bundled.
+    # A multidataset checkpoint is only installed under this canonical name
+    # after passing the promotion gate. Real-audio Bach10 and synthetic models
+    # remain fallbacks.
     return [
+        directory / "flash-neural-multidataset.pt",
         directory / "flash-neural-bach10.pt",
         directory / "flash-neural-synthetic.pt",
     ]
