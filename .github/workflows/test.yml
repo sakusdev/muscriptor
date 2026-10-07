@@ -37,6 +37,7 @@ jobs:
           muscriptor/flash_multidataset.py
           muscriptor/flash_musicnet.py
           muscriptor/flash_training_state.py
+          muscriptor/flash_train.py
           tests/test_flash.py
           tests/test_flash_colab.py
           tests/test_flash_neural.py
@@ -44,6 +45,7 @@ jobs:
           tests/test_flash_multidataset.py
           tests/test_flash_musicnet.py
           tests/test_flash_training_state.py
+          tests/test_flash_train.py
       - name: Ruff format check MuScripter Flash code
         run: >-
           uvx ruff format --check
@@ -55,6 +57,7 @@ jobs:
           muscriptor/flash_multidataset.py
           muscriptor/flash_musicnet.py
           muscriptor/flash_training_state.py
+          muscriptor/flash_train.py
           tests/test_flash.py
           tests/test_flash_colab.py
           tests/test_flash_neural.py
@@ -62,3 +65,4 @@ jobs:
           tests/test_flash_multidataset.py
           tests/test_flash_musicnet.py
           tests/test_flash_training_state.py
+          tests/test_flash_train.py
