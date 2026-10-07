@@ -72,6 +72,7 @@ Issues = "https://github.com/muscriptor/muscriptor/issues"
 muscriptor = "muscriptor.main:main"
 muscriptor-flash = "muscriptor.flash_cli:main"
 muscriptor-flash-train = "muscriptor.flash_train:main"
+muscriptor-flash-promote = "muscriptor.flash_promote:main"
 
 [tool.hatch.build]
 # The built frontend is gitignored but must ship in the sdist/wheel so that
