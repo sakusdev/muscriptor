@@ -5,11 +5,14 @@ from muscriptor import flash_pipeline
 
 def _comparison(*, f1_delta: float = 0.02, latency_ratio: float = 1.0):
     return {
-        "delta": {"precision": 0.01, "recall": 0.02, "f1": f1_delta, "latency_ratio": latency_ratio},
+        "delta": {
+            "precision": 0.01,
+            "recall": 0.02,
+            "f1": f1_delta,
+            "latency_ratio": latency_ratio,
+        },
         "per_dataset": {
-            "Fixture": {
-                "delta": {"precision": 0.01, "recall": 0.02, "f1": f1_delta}
-            }
+            "Fixture": {"delta": {"precision": 0.01, "recall": 0.02, "f1": f1_delta}}
         },
     }
 
