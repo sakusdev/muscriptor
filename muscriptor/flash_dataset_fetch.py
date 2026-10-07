@@ -31,7 +31,7 @@ def find_musicnet_root(root: str | Path) -> Path | None:
 
 
 def file_md5(path: str | Path, *, chunk_size: int = 8 * _MIB) -> str:
-    digest = hashlib.md5()  # noqa: S324 - checksum matches the published dataset digest.
+    digest = hashlib.md5()
     with Path(path).open("rb") as handle:
         while chunk := handle.read(chunk_size):
             digest.update(chunk)
@@ -46,12 +46,15 @@ def _download_with_resume(url: str, destination: Path) -> Path:
     headers = {"User-Agent": "MuScripter-Flash/0.3"}
     if existing:
         headers["Range"] = f"bytes={existing}-"
-        print(f"Resuming MusicNet download at {existing / (1024**3):.2f} GiB", flush=True)
+        print(
+            f"Resuming MusicNet download at {existing / (1024**3):.2f} GiB",
+            flush=True,
+        )
     else:
         print("Starting MusicNet download", flush=True)
 
     request = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(request, timeout=120) as response:  # noqa: S310
+    with urllib.request.urlopen(request, timeout=120) as response:
         status = int(getattr(response, "status", 200) or 200)
         append = bool(existing and status == 206)
         if existing and not append:
@@ -79,7 +82,10 @@ def _download_with_resume(url: str, destination: Path) -> Path:
                             flush=True,
                         )
                     else:
-                        print(f"Downloaded {downloaded / (1024**3):.2f} GiB", flush=True)
+                        print(
+                            f"Downloaded {downloaded / (1024**3):.2f} GiB",
+                            flush=True,
+                        )
                     next_report = downloaded + 512 * _MIB
 
     os.replace(partial, destination)
@@ -97,7 +103,7 @@ def _safe_extract_tar(archive_path: Path, destination: Path) -> None:
             target = (destination / member.name).resolve()
             if target != root and root not in target.parents:
                 raise ValueError(f"unsafe archive path: {member.name}")
-        archive.extractall(destination, members=members)  # noqa: S202
+        archive.extractall(destination, members=members)
 
 
 def ensure_musicnet(
@@ -130,14 +136,21 @@ def ensure_musicnet(
             f"at least {minimum_free_gib:.1f} GiB is required by this helper"
         )
 
-    cache_root = Path(cache_dir).expanduser().resolve() if cache_dir else dataset_dir.parent / ".cache"
+    cache_root = (
+        Path(cache_dir).expanduser().resolve()
+        if cache_dir
+        else dataset_dir.parent / ".cache"
+    )
     cache_root.mkdir(parents=True, exist_ok=True)
     archive_path = cache_root / "musicnet.tar.gz"
 
     if archive_path.is_file() and verify_md5:
         checksum = file_md5(archive_path)
         if checksum != MUSICNET_MD5:
-            print("Cached MusicNet archive checksum mismatch; downloading again", flush=True)
+            print(
+                "Cached MusicNet archive checksum mismatch; downloading again",
+                flush=True,
+            )
             archive_path.unlink()
 
     if not archive_path.is_file():
@@ -155,7 +168,9 @@ def ensure_musicnet(
     _safe_extract_tar(archive_path, dataset_dir)
     root = find_musicnet_root(dataset_dir)
     if root is None:
-        raise RuntimeError("MusicNet archive extracted but expected split folders were not found")
+        raise RuntimeError(
+            "MusicNet archive extracted but expected split folders were not found"
+        )
 
     if not keep_archive:
         archive_path.unlink(missing_ok=True)
