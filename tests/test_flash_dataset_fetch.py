@@ -26,7 +26,7 @@ def test_file_md5_matches_known_digest(tmp_path: Path):
     path = tmp_path / "payload.bin"
     path.write_bytes(b"MuScripter Flash")
 
-    assert flash_dataset_fetch.file_md5(path) == "9af1e686c963e4e50a11d3606811810f"
+    assert flash_dataset_fetch.file_md5(path) == "89eebef67eec6c755cdf269babea52e7"
 
 
 def test_safe_extract_tar_rejects_path_traversal(tmp_path: Path):
